@@ -1,0 +1,79 @@
+**审核报告**
+
+## 一、问题根因分析
+
+从Prompt架构、上下文管理策略和记忆机制的专业视角来看，三大问题本质上都源于**“状态缺失 + 上下文退化 + 提示词控制力不足”**的三重失效：
+
+1. **情节/文字重复率高**  
+根本原因是**长期记忆的结构性缺失**。当前仅注入前一章1500字结尾，导致第N章生成时，模型实际可参考的有效上下文随章节数指数级衰减（典型的“失忆”现象）。同时，大纲、Lorebook、世界设定**全量每次注入**，形成了严重的Prompt噪声。模型在高噪声+有限上下文下，会退化到“最安全路径”——重复自己最熟悉的模式（大纲中的句子或前文高频描述）。  
+此外，`temperature=0.85`在缺乏**显式Anti-Repetition机制**（如负采样、n-gram penalty、embedding相似度硬约束）的情况下，进一步放大了幻觉循环。GrokRepository.kt当前的Prompt是“扁平巨型Prompt”，缺少分层控制和生成前的“情节唯一性检查”环节。
+
+2. **人物逻辑或对话逻辑错误**  
+核心在于**角色状态的非结构化与不可查询**。`keyCharacters`和`ChapterInstruction.characterChanges`均为纯文本，模型无法维持一个可信的“世界状态机”。当上下文超过模型可靠记忆长度后，角色当前的情绪、已知信息、关系演变、物理位置等全部依赖参数化记忆（parametric memory），必然产生漂移。  
+系统提示词中“角色行为符合设定”属于**模糊指令**，在大模型中效果极弱。没有将“角色一致性”转化为**Chain-of-Verification**或**State Delta Tracking**的结构化Prompt流程，导致模型在生成时无法进行自我一致性对齐。
+
+3. **称呼错误**  
+这是**实体 grounding（实体 grounding）失败**的典型表现。人物关系、称谓映射、当前叙事视角在Prompt中以自然语言形式分散存在，没有被提取为**显式关系图谱（Relationship Graph）**或**动态称谓映射表**。当模型同时处理多个角色、多重关系（尤其是涉及化名、尊卑、亲疏变化）时，注意力机制容易混淆，导致称谓幻觉。  
+当前架构完全缺乏**生成后/生成中的实体一致性校验层**，这是Prompt工程中最容易被忽视但最致命的缺陷之一。
+
+## 二、现有架构缺陷
+
+1. **上下文管理策略落后**：采用“全量注入+固定截断”而非“智能压缩+向量召回”，违背了长上下文Prompt工程的最佳实践。
+2. **记忆机制缺失**：无分层记忆架构（短期工作记忆、中期章节摘要、长期世界事实），仅依赖Grok原生上下文窗口。
+3. **Prompt架构原始**：单一大Prompt模式，未采用**分层Prompt（System + Character Sheet + Plot Anchor + Consistency Guardrails）**，导致指令冲突和优先级混乱。
+4. **数据模型与Prompt解耦不足**：Novel和Chapter均为纯文本字段，无法支撑结构化Prompt生成和状态追踪，属于典型的“把数据库当记事本用”。
+5. **缺少一致性闭环**：生成流程是单向的（Instruction→Prompt→Output），没有**Generate → Critique → Revise**的自洽循环，这是当前最严重的技术债。
+6. **缺乏重复与一致性量化指标**：系统无法在生成前/生成后测量“情节新颖度”和“角色状态一致性”，导致问题只能靠用户反馈发现。
+
+## 三、改进方案
+
+### **P0（必须在本版本解决的核心问题）**
+
+**方案1：引入结构化章节摘要 + 向量记忆系统（ChapterSummary + VectorStore）**  
+**目标**：解决长期记忆衰减和重复问题。  
+**具体实现步骤**：
+- 新增数据模型`ChapterSummary`（包含：core_events, character_arcs, relationship_deltas, open_threads, key_facts）。
+- 每章生成完成后，调用Grok以结构化JSON格式强制输出摘要，并存入本地向量数据库（建议用SQLite + sentence-transformers或直接调用Grok embedding）。
+- 生成下一章时，使用**HyDE + MMR**算法召回最相关的前3-5章摘要，替换当前“仅前一章1500字”的机制。
+- 在Prompt中增加“Memory Stream”区块，明确标注“以下是已确认的世界状态，请严格遵守”。
+**预期效果**：跨章节重复率大幅下降，人物状态漂移减少60%以上。
+
+**方案2：引入CharacterState状态机与Consistency Guardrail Prompt**  
+**目标**：根治人物逻辑和称呼错误。  
+**具体实现步骤**：
+- 新建`CharacterState`数据类（current_mood, known_information, relationships: Map<String, RelationType>, current_addressing: Map<String, String>）。
+- 生成前，先让模型输出**本章角色状态变化计划（StateDelta）**作为第一步（Two-Stage Generation）。
+- 在主写作Prompt中注入**当前最新CharacterState JSON**和**称谓映射表**，并加入强指令：“你必须以JSON中current_addressing为准进行称呼，禁止使用其他称谓”。
+- 生成后增加**Consistency Critic** Prompt，让模型自己打分（1-10分），低于8分则触发自动重写。
+**预期效果**：称呼错误率下降90%，人物逻辑矛盾显著减少。
+
+### **P1（下一迭代重点优化）**
+
+**方案3：Lorebook升级为动态RAG召回 + 相关性过滤**  
+**目标**：减少Prompt噪声。  
+**具体实现步骤**：将LorebookEntry向量化，生成章节时根据本章Instruction和StateDelta进行TopK+MMR召回，仅注入真正相关的条目，并在Prompt中标注“本条Lorebook的相关性分数”。
+
+**方案4：分层Prompt架构重构（GrokRepository.kt重构）**  
+**目标**：提升Prompt可控性。  
+**具体实现步骤**：
+- 将当前巨型Prompt拆分为：System Guardrails（固定）→ Character Bible（动态注入最新State）→ Plot Anchor（当前章节目标+前文摘要）→ Style & Anti-pattern（禁止事项+反面示例）→ User Instruction。
+- 引入Few-shot Consistency Examples（3-5个正反例）放在System层。
+
+### **P2（后续持续改进）**
+
+**方案5：生成后处理一致性检查流水线**  
+**目标**：建立最后防线。  
+**具体实现步骤**：生成完成后，运行专用检查Prompt，检测重复段落（n-gram+embedding cosine>0.82）、称谓冲突、逻辑矛盾，并自动高亮或触发局部重写。
+
+**方案6：动态Temperature + Repetition Penalty控制**  
+根据当前上下文长度、已生成章节数、重复历史动态调整temperature（0.65-0.9）和frequency penalty。
+
+## 四、与其他角色的协作建议
+
+1. **与数据模型/后端工程师**：必须共同定义`ChapterSummary`和`CharacterState`的结构化Schema，这是所有Prompt改进的前提。建议在v3.2版本完成数据模型迁移。
+2. **与前端工程师**：需要在写作界面展示“当前角色状态卡片”和“世界状态摘要”，允许用户手动修正，这是人机协同闭环的关键。
+3. **与测试/QA角色**：共同制定可量化的内容质量指标（情节重复率、角色一致性得分、称呼准确率），并建立回归测试集（10个长篇连载案例）。
+4. **与产品经理**：需要明确“一致性优先于创意”的产品策略，在UI上增加“严格模式/创意模式”切换，影响temperature和Guardrail强度。
+5. **与Prompt测试专员**：我需要与其紧密配合，迭代Consistency Guardrail Prompt和Critic Prompt，至少进行3轮A/B测试验证效果。
+
+以上方案若能按P0→P1优先级落地，xsgrok2的内容质量可实现从“可用”到“可商用”的跨越。

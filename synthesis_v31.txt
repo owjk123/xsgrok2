@@ -1,0 +1,133 @@
+**v3.2迭代方案：xsgrok2 长篇小说一致性重构**
+
+---
+
+## 一、共识发现（四方一致认可的关键问题）
+
+四位专家（产品经理、深度用户、AI Prompt工程师、小说编辑/内容质检员）在以下核心问题上达成**高度一致**：
+
+1. **根本架构缺陷**：当前系统是“单次巨型Prompt + 纯文本状态”的设计，把所有长期一致性压力全部压在上下文窗口上。这在长篇小说（10万字+）场景下必然导致崩溃，属于典型的“Prompt Engineering万能论”错误。
+
+2. **三大问题同源**：
+   - **情节/文字重复率高**：长期记忆缺失 + 全量注入大纲/Lorebook导致“复读机”现象，前文仅保留前一章1500字造成严重失忆。
+   - **人物逻辑/对话逻辑错误**：缺少结构化的**Character State Machine**，角色是静态文本而非可查询、可更新的活状态。
+   - **称呼错误**：实体消歧与动态关系映射缺失，注意力机制在长上下文下无法维持稳定的称谓-关系绑定。
+
+3. **必须进行的架构升级**：
+   - 数据模型从纯文本转向结构化（`CharacterState`、`ChapterSummary`、`RelationshipGraph`）。
+   - 建立**分层记忆系统**（短期前文 + 中期章节摘要 + 长期向量记忆）。
+   - 将生成流程从“单Pass”升级为**多阶段Pipeline**（State Planning → Writing → Self-Critique → Repair）。
+   - Lorebook从全量注入改为**RAG动态召回**。
+   - 增加生成后**自动质检与修复闭环**，不能仅依赖Prompt预防。
+
+所有专家均认为，这是xsgrok2从“能生成”到“能稳定长期追更”的**0到1架构级跨越**，必须在v3.2完成核心重构。
+
+---
+
+## 二、分歧点与决策
+
+**分歧点**：
+- **优先级微调**：产品经理更强调CharacterState先行，深度用户和Prompt工程师更重视Memory Hierarchy与向量召回，编辑最强调Self-Critique双Pass机制。
+- **技术路径**：向量数据库选型（sqlite-vss vs 外部embedding）、State结构的粒度（是否包含addressMap）、Critique的触发时机（生成后必做 vs 阈值触发）存在差异。
+- **闭环深度**：部分专家建议立即引入用户反馈驱动的Prompt进化，另一些认为应放在P2。
+
+**架构师决策**（最终统一方案）：
+- **融合最优路径**：采用“CharacterState + 分层记忆 + 多阶段Pipeline + Post-Generation Guardrail”的四位一体方案。
+- **P0必须落地**：数据模型重构、分层记忆、结构化状态机、Prompt分层重构、基础Self-Critique。
+- **向量召回**采用**本地轻量方案**（Room + Sentence-Transformers ONNX模型或Grok Embedding API），避免外部依赖。
+- **Self-Critique**采用**强制双Pass**（编辑视角），但增加质量评分阈值机制，兼顾效率。
+- **命名与结构统一**：采用产品经理提出的`CharacterState`模型，融合Prompt工程师的`StateDelta`两阶段生成，和编辑的`addressMap`称呼映射。
+
+---
+
+## 三、v3.2迭代方案（按P0/P1/P2排列）
+
+### **P0（v3.2必须完成，核心一致性骨架）**
+
+**1. 数据模型重构**
+- 新建`CharacterState.kt`：
+  ```kotlin
+  data class CharacterState(
+      val characterId: String,
+      val currentMood: String,
+      val knownInformation: List<String>,
+      val relationships: Map<String, Relation>, // targetId -> Relation
+      val addressMap: Map<String, String>,      // targetId -> 当前称呼
+      val currentLocation: String?,
+      val forbiddenActions: List<String>,
+      val arcProgress: String
+  )
+  ```
+- `Chapter`新增字段：`summary: String`, `keyEvents: List<String>`, `characterStates: Map<String, CharacterState>`, `qualityScore: Float?`。
+- 新建`ChapterSummary`实体和`MemoryVector`表（用于RAG）。
+
+**2. 分层记忆与摘要生成机制**
+- 新建`MemoryService.kt`，包含：
+  - `generateChapterSummary(Chapter)`：生成后立即调用Grok以JSON Schema强制输出摘要、keyEvents、stateDeltas。
+  - `buildMemoryStream(novelId, currentChapter)`：返回“最新3章完整内容 + 最近8章浓缩摘要（向量召回Top6） + 长期记忆压缩版”。
+- 替换原有“仅前一章1500字”逻辑。
+
+**3. 结构化角色状态机 + 两阶段生成Pipeline**
+- 重构`GrokRepository.kt` → `GenerationPipeline.kt`：
+  1. **Stage 1 (State Planner)**：注入前文记忆 + 当前所有CharacterState，输出`StateDelta`（JSON）。
+  2. **Stage 2 (Writer)**：注入更新后的完整`CharacterState`（含addressMap）和“必须严格按addressMap使用称呼”的强指令，生成正文。
+- Prompt分层重构（System → Memory Stream → Character Bible → Plot Anchor → Consistency Guardrails → Instruction）。
+
+**4. 基础Self-Critique机制**
+- 生成后强制执行Critic Prompt（编辑视角Checklist），输出质量评分和<revision>建议。若评分<80分，自动触发局部重写（最多2次）。
+
+### **P1（v3.2.1必须完成，质量兜底）**
+
+**5. 自动质检Pipeline（QualityInspector.kt）**
+- 实现三个检查器：
+  - `RepetitionDetector`：使用本地embedding计算200字片段与前6章的余弦相似度（>0.78触发重写）。
+  - `LogicConsistencyChecker`：使用JSON模式让Grok判断行为是否与CharacterState冲突。
+  - `EntityResolver`：提取所有称谓，建立临时关系三元组，与全局addressMap比对。
+- 增加“一键修复本章”按钮，触发专用Fix Prompt。
+
+**6. Lorebook RAG升级**
+- LorebookEntry增加`embedding`字段。
+- 实现`HybridRetriever`（BM25 + 向量），根据本章Instruction和StateDelta召回Top8相关条目，标注相关性分数。
+
+### **P2（v3.2后续优化项）**
+
+**7. 用户反馈闭环与可观测性**
+- 用户标记错误后，存入Few-shot示例库，每5章自动让Grok生成个性化系统提示词。
+- 增加“记忆浏览器”与“角色状态面板”UI。
+- 建立质量趋势看板（重复率、逻辑冲突率、称呼准确率、跨章一致性衰减曲线）。
+
+---
+
+## 四、技术实现要点
+
+1. **GrokRepository重构**：改为`GenerationPipeline`类，明确定义`PipelineContext`（包含MemoryStream、CurrentStates、RetrievedLore、Instruction），所有Prompt模板统一放在`PromptTemplates.kt`中，使用版本管理。
+
+2. **状态更新闭环**：生成完成后必须调用`MemoryService.updateStatesFromDelta()`，确保状态持久化。所有状态变更必须经过`StateValidator`。
+
+3. **向量方案**：优先使用`sqlite-vss`或`Room + ONNX`本地embedding模型（all-MiniLM-L6-v2），避免token消耗。如需更高精度，可切换到Grok Embedding API。
+
+4. **Prompt工程规范**：
+   - 所有关键指令使用XML标签（如`<state>`, `<memory>`, `<critique>`）。
+   - 加入显式Anti-Repetition指令 + 正反Few-shot示例。
+   - Temperature策略：State Planning阶段0.7，Writing阶段0.85，Critique阶段0.6。
+
+5. **Android端适配**：新增`StatePanelFragment`和`MemoryDebugScreen`，便于调试和用户干预。
+
+6. **迁移计划**：提供数据迁移脚本，将现有纯文本keyCharacters转换为CharacterState初始快照。
+
+---
+
+## 五、验收标准
+
+**量化指标**（必须全部达标才可发布v3.2）：
+- **称呼正确率** ≥ 98%（人工+EntityResolver双重验证，20章测试集）。
+- **情节重复率** ≤ 5%（embedding相似度>0.78的片段占比）。
+- **逻辑冲突数** ≤ 1.5处/10章（LogicConsistencyChecker + 人工抽检）。
+- **第20章一致性保持率** ≥ 85%（与第1-5章关键事件、人物弧光、伏笔回收匹配度）。
+- **平均质量评分**（Self-Critique）≥ 87分。
+- **Prompt token消耗**较v3.1下降 ≥ 35%（得益于RAG替代全量注入）。
+- **用户主观满意度**：10位深度用户盲测打分，长期追更意愿提升 ≥ 70%。
+
+**测试集要求**：必须包含复杂关系网（多重称呼、化名、关系演变）、长线伏笔、情绪弧光反转的20章连贯测试案例。
+
+通过以上方案，xsgrok2将建立真正的**小说生成状态机**，从根本上解决当前所有核心质量问题。建议立即启动数据模型迁移和Pipeline重构工作。
