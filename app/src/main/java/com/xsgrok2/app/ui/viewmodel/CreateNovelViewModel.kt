@@ -3,7 +3,6 @@ package com.xsgrok2.app.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.xsgrok2.app.data.database.AppDatabase
 import com.xsgrok2.app.data.model.Novel
 import com.xsgrok2.app.data.preferences.AppPreferences
 import com.xsgrok2.app.data.repository.GrokRepository
@@ -11,22 +10,18 @@ import com.xsgrok2.app.data.repository.NovelRepository
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
+enum class CreateStep { INPUT, GENERATING, REVIEW, SAVING }
+
 data class CreateNovelUiState(
     val genre: String = "",
     val description: String = "",
+    val writingStyle: String = "细腻生动",
     val generatedSettings: String = "",
     val isLoading: Boolean = false,
-    val error: String? = null,
     val step: CreateStep = CreateStep.INPUT,
+    val error: String? = null,
     val createdNovelId: Long? = null
 )
-
-enum class CreateStep {
-    INPUT,
-    GENERATING,
-    REVIEW,
-    SAVING
-}
 
 class CreateNovelViewModel(
     private val novelRepository: NovelRepository,
@@ -45,6 +40,10 @@ class CreateNovelViewModel(
         _uiState.update { it.copy(description = description) }
     }
 
+    fun updateWritingStyle(style: String) {
+        _uiState.update { it.copy(writingStyle = style) }
+    }
+
     fun updateGeneratedSettings(settings: String) {
         _uiState.update { it.copy(generatedSettings = settings) }
     }
@@ -52,13 +51,13 @@ class CreateNovelViewModel(
     fun generateSettings() {
         val apiKey = preferences.apiKey
         if (apiKey.isEmpty()) {
-            _uiState.update { it.copy(error = "Please set your API key in Settings first") }
+            _uiState.update { it.copy(error = "请先在设置中配置API密钥") }
             return
         }
         val genre = _uiState.value.genre.trim()
         val description = _uiState.value.description.trim()
         if (genre.isEmpty() || description.isEmpty()) {
-            _uiState.update { it.copy(error = "Please fill in both genre and description") }
+            _uiState.update { it.copy(error = "请填写小说类型和核心构思") }
             return
         }
 
@@ -85,7 +84,7 @@ class CreateNovelViewModel(
                         it.copy(
                             isLoading = false,
                             step = CreateStep.INPUT,
-                            error = e.message ?: "Failed to generate settings"
+                            error = e.message ?: "生成设定失败"
                         )
                     }
                 }
@@ -101,9 +100,10 @@ class CreateNovelViewModel(
                 title = extractTitle(state.generatedSettings, state.genre),
                 genre = state.genre,
                 description = state.description,
-                worldSetting = extractSection(state.generatedSettings, "World Setting"),
-                keyCharacters = extractSection(state.generatedSettings, "Key Characters"),
-                outline = extractSection(state.generatedSettings, "Story Outline"),
+                writingStyle = state.writingStyle,
+                worldSetting = extractSection(state.generatedSettings, listOf("一、", "世界设定", "时代背景", "背景与环境")),
+                keyCharacters = extractSection(state.generatedSettings, listOf("二、", "核心角色", "角色")),
+                outline = extractSection(state.generatedSettings, listOf("三、", "故事大纲", "大纲")),
                 model = preferences.model
             )
             val id = novelRepository.insertNovel(novel)
@@ -119,29 +119,37 @@ class CreateNovelViewModel(
         val lines = settings.lines()
         for (line in lines) {
             val trimmed = line.trim()
-            if (trimmed.startsWith("#") || trimmed.startsWith("Title")) {
-                val title = trimmed.removePrefix("#").removePrefix("Title:").removePrefix("Title").trim()
-                if (title.isNotEmpty()) return title
+            if (trimmed.startsWith("《") && trimmed.contains("》")) {
+                return trimmed.substringAfter("《").substringBefore("》").trim()
+            }
+            if (trimmed.startsWith("#")) {
+                val title = trimmed.removePrefix("#").removePrefix("#").trim()
+                if (title.isNotEmpty() && title.length < 30 && !title.contains("设定") && !title.contains("角色") && !title.contains("大纲")) {
+                    return title
+                }
             }
         }
-        return "$genre Novel"
+        return "${genre}小说"
     }
 
-    private fun extractSection(text: String, sectionName: String): String {
+    private fun extractSection(text: String, sectionHeaders: List<String>): String {
         val lines = text.lines()
         val result = StringBuilder()
         var inSection = false
+
         for (line in lines) {
             val trimmed = line.trim()
-            if (trimmed.contains(sectionName, ignoreCase = true) &&
-                (trimmed.startsWith("#") || trimmed.startsWith("**") || trimmed.startsWith("-") || trimmed.endsWith(":"))) {
-                inSection = true
-                continue
-            }
-            if (inSection) {
-                if (trimmed.startsWith("#") || (trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4)) {
-                    break
+            val isHeader = trimmed.startsWith("#") ||
+                    trimmed.matches(Regex("^[一二三四五六七八九十]+[、．.].*")) ||
+                    (trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4)
+
+            if (isHeader) {
+                if (inSection) break
+                if (sectionHeaders.any { header -> trimmed.contains(header) }) {
+                    inSection = true
+                    continue
                 }
+            } else if (inSection) {
                 result.appendLine(line)
             }
         }

@@ -7,110 +7,154 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.xsgrok2.app.App
-import com.xsgrok2.app.ui.viewmodel.SettingsViewModel
 import com.xsgrok2.app.ui.viewmodel.SettingsUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    onNavigateBack: () -> Unit
+    uiState: SettingsUiState,
+    onBack: () -> Unit,
+    onUpdateApiKey: (String) -> Unit,
+    onUpdateModel: (String) -> Unit,
+    onUpdateApiBaseUrl: (String) -> Unit,
+    onUpdateWritingStyle: (String) -> Unit,
+    onUpdateFontSize: (Int) -> Unit,
+    onUpdateNightMode: (Boolean) -> Unit,
+    onSave: () -> Unit
 ) {
-    val context = LocalContext.current
-    val app = context.applicationContext as App
-    val preferences = app.preferences
+    var apiKeyInput by remember(uiState.apiKey) { mutableStateOf(uiState.apiKey) }
+    var baseUrlInput by remember(uiState.apiBaseUrl) { mutableStateOf(uiState.apiBaseUrl) }
 
-    val viewModel: SettingsViewModel = viewModel(
-        factory = SettingsViewModel.Factory(preferences)
+    val models = listOf(
+        "grok-4.20-beta" to "Grok 4.20 基础版",
+        "grok-4.20-beta-0309-reasoning" to "Grok 4.20 推理版"
     )
-
-    val uiState by viewModel.uiState.collectAsState()
+    val writingStyles = listOf("细腻生动", "简洁有力", "幽默风趣", "冷峻写实", "诗意唯美")
+    val fontSizes = listOf(14 to "小", 16 to "中", 18 to "大", 20 to "特大")
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text("设置") },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 }
             )
         }
-    ) { paddingValues ->
+    ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
+                .padding(padding)
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // API Key
+            // API设置
+            Text("API 配置", style = MaterialTheme.typography.titleMedium)
+
             OutlinedTextField(
-                value = uiState.apiKey,
-                onValueChange = viewModel::updateApiKey,
-                label = { Text("API Key") },
-                placeholder = { Text("Enter your API key") },
-                visualTransformation = PasswordVisualTransformation(),
+                value = apiKeyInput,
+                onValueChange = {
+                    apiKeyInput = it
+                    onUpdateApiKey(it)
+                },
+                label = { Text("API 密钥") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
 
-            // Model Selection
-            Text(
-                "Model",
-                style = MaterialTheme.typography.titleMedium
+            OutlinedTextField(
+                value = baseUrlInput,
+                onValueChange = {
+                    baseUrlInput = it
+                    onUpdateApiBaseUrl(it)
+                },
+                label = { Text("API 地址") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
             )
+
+            Text("模型选择", style = MaterialTheme.typography.bodyMedium)
+            models.forEach { (value, label) ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    RadioButton(
+                        selected = uiState.model == value,
+                        onClick = { onUpdateModel(value) }
+                    )
+                    Text(label, modifier = Modifier.padding(start = 8.dp))
+                }
+            }
+
+            HorizontalDivider()
+
+            // 写作风格
+            Text("默认写作风格", style = MaterialTheme.typography.titleMedium)
+            writingStyles.forEach { style ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    RadioButton(
+                        selected = uiState.writingStyle == style,
+                        onClick = { onUpdateWritingStyle(style) }
+                    )
+                    Text(style, modifier = Modifier.padding(start = 8.dp))
+                }
+            }
+
+            HorizontalDivider()
+
+            // 阅读设置
+            Text("阅读设置", style = MaterialTheme.typography.titleMedium)
+
+            Text("字体大小", style = MaterialTheme.typography.bodyMedium)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
-                    selected = uiState.model == "grok-4.20-beta",
-                    onClick = { viewModel.updateModel("grok-4.20-beta") },
-                    label = { Text("Base") }
-                )
-                FilterChip(
-                    selected = uiState.model == "grok-4.20-beta-0309-reasoning",
-                    onClick = { viewModel.updateModel("grok-4.20-beta-0309-reasoning") },
-                    label = { Text("Reasoning") }
-                )
+                fontSizes.forEach { (size, label) ->
+                    FilterChip(
+                        selected = uiState.fontSize == size,
+                        onClick = { onUpdateFontSize(size) },
+                        label = { Text(label) }
+                    )
+                }
             }
-            Text(
-                "Selected: ${uiState.model}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
 
-            // API Base URL
-            OutlinedTextField(
-                value = uiState.apiBaseUrl,
-                onValueChange = viewModel::updateApiBaseUrl,
-                label = { Text("API Base URL") },
-                placeholder = { Text("https://api.apiyi.com/v1") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-
-            // Save Button
-            Button(
-                onClick = viewModel::saveSettings,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Save Settings")
+                Text("夜间模式", modifier = Modifier.weight(1f))
+                Switch(
+                    checked = uiState.nightMode,
+                    onCheckedChange = onUpdateNightMode
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = onSave,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("保存设置")
             }
 
             if (uiState.isSaved) {
                 Text(
-                    "Settings saved!",
+                    "设置已保存 ✓",
                     color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodySmall
                 )
             }
         }

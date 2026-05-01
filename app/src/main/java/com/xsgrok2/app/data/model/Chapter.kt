@@ -20,10 +20,12 @@ import androidx.room.Index
 data class Chapter(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val novelId: Long,
-    val chapterNumber: Int,
-    val title: String,
+    val novelId: Long = 0,
+    val chapterNumber: Int = 0,
+    val title: String = "",
     val content: String = "",
     val isGenerated: Boolean = false,
+    val userNote: String = "",
+    val wordCount: Int = 0,
     val createdAt: Long = System.currentTimeMillis()
 )

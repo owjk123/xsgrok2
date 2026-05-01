@@ -1,224 +1,200 @@
 package com.xsgrok2.app.ui.screens
 
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.xsgrok2.app.App
 import com.xsgrok2.app.data.model.Chapter
-import com.xsgrok2.app.data.repository.NovelRepository
-import com.xsgrok2.app.data.repository.GrokRepository
-import com.xsgrok2.app.data.api.GrokApiService
-import com.xsgrok2.app.ui.viewmodel.NovelDetailViewModel
+import com.xsgrok2.app.data.model.Novel
 import com.xsgrok2.app.ui.viewmodel.NovelDetailUiState
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
+import com.xsgrok2.app.utils.ExportUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NovelDetailScreen(
-    novelId: Long,
-    onNavigateBack: () -> Unit,
-    onNavigateToChapter: (Long, Long) -> Unit
+    uiState: NovelDetailUiState,
+    onBack: () -> Unit,
+    onGenerateNextChapter: () -> Unit,
+    onNavigateToChapter: (Long) -> Unit,
+    onDeleteNovel: () -> Unit
 ) {
+    val novel = uiState.novel
     val context = LocalContext.current
-    val app = context.applicationContext as App
-    val database = app.database
-    val preferences = app.preferences
-
-    val novelRepository = remember {
-        NovelRepository(database.novelDao(), database.chapterDao())
-    }
-    val grokRepository = remember {
-        val retrofit = Retrofit.Builder()
-            .baseUrl(preferences.apiBaseUrl.trimEnd('/') + "/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-        GrokRepository(retrofit.create(GrokApiService::class.java))
-    }
-
-    val viewModel: NovelDetailViewModel = viewModel(
-        factory = NovelDetailViewModel.Factory(novelId, novelRepository, grokRepository, preferences)
-    )
-
-    val uiState by viewModel.uiState.collectAsState()
-
-    val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(uiState.error) {
-        uiState.error?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.clearError()
-        }
-    }
+    val scope = rememberCoroutineScope()
+    var showDeleteDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Text(
-                        uiState.novel?.title ?: "Novel",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
+                title = { Text(novel?.title ?: "小说详情") },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val dir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOCUMENTS)
+                                if (dir != null && novel != null) {
+                                    val file = ExportUtils.exportToTxt(novel, uiState.chapters, dir)
+                                    scope.launch(Dispatchers.Main) {
+                                        Toast.makeText(context, "已导出到: ${file.name}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                scope.launch(Dispatchers.Main) {
+                                    Toast.makeText(context, "导出失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }) {
+                        Icon(Icons.Default.FileDownload, contentDescription = "导出")
+                    }
+                    IconButton(onClick = { showDeleteDialog = true }) {
+                        Icon(Icons.Default.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
                     }
                 }
             )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { paddingValues ->
-        if (uiState.isLoading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues),
-                contentAlignment = Alignment.Center
-            ) {
+        }
+    ) { padding ->
+        if (novel == null) {
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
         } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                val novel = uiState.novel
-                if (novel != null) {
-                    // Novel Info Card
+                // 小说信息
+                item {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            Text(novel.title, style = MaterialTheme.typography.titleLarge)
+                            Text(novel.title, style = MaterialTheme.typography.headlineSmall)
                             Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                "Genre: ${novel.genre}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            if (novel.worldSetting.isNotBlank()) {
-                                Text("World Setting", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    novel.worldSetting,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                            Text("${novel.genre} · ${novel.writingStyle}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (novel.description.isNotEmpty()) {
                                 Spacer(modifier = Modifier.height(8.dp))
-                            }
-                            if (novel.keyCharacters.isNotBlank()) {
-                                Text("Key Characters", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    novel.keyCharacters,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                            if (novel.outline.isNotBlank()) {
-                                Text("Outline", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    novel.outline,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 5,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                Text(novel.description, style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
+                }
 
-                    // Generate Next Chapter
+                // 设定预览
+                if (novel.worldSetting.isNotEmpty()) {
+                    item {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("世界设定", style = MaterialTheme.typography.titleSmall)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(novel.worldSetting, style = MaterialTheme.typography.bodySmall, maxLines = 5)
+                            }
+                        }
+                    }
+                }
+
+                if (novel.keyCharacters.isNotEmpty()) {
+                    item {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("核心角色", style = MaterialTheme.typography.titleSmall)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(novel.keyCharacters, style = MaterialTheme.typography.bodySmall, maxLines = 5)
+                            }
+                        }
+                    }
+                }
+
+                // 章节列表标题
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("章节 (${uiState.chapters.size})", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+
+                // 章节列表
+                items(uiState.chapters) { chapter ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { onNavigateToChapter(chapter.id) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.AutoStories, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(chapter.title, style = MaterialTheme.typography.bodyLarge)
+                                if (chapter.wordCount > 0) {
+                                    Text("${chapter.wordCount}字", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 生成按钮
+                item {
                     Button(
-                        onClick = viewModel::generateNextChapter,
+                        onClick = onGenerateNextChapter,
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !uiState.isGenerating
                     ) {
                         if (uiState.isGenerating) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Generating Chapter ${uiState.nextChapterNumber}...")
+                            Text("正在生成第${uiState.nextChapterNumber}章...")
                         } else {
-                            Icon(Icons.Default.AutoStories, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Generate Chapter ${uiState.nextChapterNumber}")
+                            Text("生成第${uiState.nextChapterNumber}章")
                         }
                     }
 
-                    // Chapter List
-                    if (uiState.chapters.isNotEmpty()) {
-                        Text("Chapters", style = MaterialTheme.typography.titleMedium)
-                        uiState.chapters.forEach { chapter ->
-                            ChapterItem(
-                                chapter = chapter,
-                                onClick = { onNavigateToChapter(novelId, chapter.id) }
-                            )
-                        }
+                    uiState.error?.let { error ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
         }
     }
-}
 
-@Composable
-fun ChapterItem(
-    chapter: Chapter,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        onClick = onClick
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    chapter.title,
-                    style = MaterialTheme.typography.titleSmall
-                )
-                if (chapter.content.isNotBlank()) {
-                    Text(
-                        "${chapter.content.take(100)}...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("确认删除") },
+            text = { Text("确定要删除这本小说及所有章节吗？此操作不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteNovel()
+                    showDeleteDialog = false
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
             }
-            if (chapter.isGenerated) {
-                Text(
-                    "AI",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
+        )
     }
 }

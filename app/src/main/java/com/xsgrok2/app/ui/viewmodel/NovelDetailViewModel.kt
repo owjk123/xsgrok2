@@ -49,44 +49,55 @@ class NovelDetailViewModel(
         }
     }
 
-    fun generateNextChapter() {
+    fun generateNextChapter(userNote: String = "") {
         val apiKey = preferences.apiKey
         if (apiKey.isEmpty()) {
-            _uiState.update { it.copy(error = "Please set your API key in Settings first") }
+            _uiState.update { it.copy(error = "请先在设置中配置API密钥") }
             return
         }
         val novel = _uiState.value.novel ?: return
         val chapterNumber = _uiState.value.nextChapterNumber
-        val chapterTitle = "Chapter $chapterNumber"
+        val chapterTitle = "第${chapterNumber}章"
 
         viewModelScope.launch {
             _uiState.update { it.copy(isGenerating = true, error = null) }
-            val previousContent = _uiState.value.chapters.lastOrNull()?.content ?: ""
+            // P0 fix: use takeLast(1500) instead of take(500) for better context continuity
+            val previousContent = _uiState.value.chapters.lastOrNull()?.content?.takeLast(1500) ?: ""
             val result = grokRepository.generateChapter(
                 apiKey = apiKey,
                 model = preferences.model,
                 novel = novel,
                 chapterNumber = chapterNumber,
                 chapterTitle = chapterTitle,
-                previousChapterContent = previousContent
+                previousChapterContent = previousContent,
+                userNote = userNote
             )
             result.fold(
                 onSuccess = { content ->
+                    val wordCount = content.filter { it.code > 127 }.length // Chinese char count
                     val chapter = Chapter(
                         novelId = novelId,
                         chapterNumber = chapterNumber,
                         title = chapterTitle,
                         content = content,
-                        isGenerated = true
+                        isGenerated = true,
+                        userNote = userNote,
+                        wordCount = wordCount
                     )
                     novelRepository.insertChapter(chapter)
+                    // Update novel's totalWordCount
+                    val updatedNovel = novel.copy(
+                        totalWordCount = novel.totalWordCount + wordCount,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    novelRepository.updateNovel(updatedNovel)
                     _uiState.update { it.copy(isGenerating = false) }
                 },
                 onFailure = { e ->
                     _uiState.update {
                         it.copy(
                             isGenerating = false,
-                            error = e.message ?: "Failed to generate chapter"
+                            error = e.message ?: "生成章节失败"
                         )
                     }
                 }

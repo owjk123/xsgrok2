@@ -8,58 +8,30 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.xsgrok2.app.App
-import com.xsgrok2.app.data.repository.NovelRepository
-import com.xsgrok2.app.data.repository.GrokRepository
-import com.xsgrok2.app.data.api.GrokApiService
-import com.xsgrok2.app.ui.viewmodel.CreateNovelViewModel
-import com.xsgrok2.app.ui.viewmodel.CreateNovelUiState
 import com.xsgrok2.app.ui.viewmodel.CreateStep
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
+import com.xsgrok2.app.ui.viewmodel.CreateNovelUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateNovelScreen(
-    onNavigateBack: () -> Unit,
-    onNovelCreated: (Long) -> Unit
+    uiState: CreateNovelUiState,
+    onBack: () -> Unit,
+    onUpdateGenre: (String) -> Unit,
+    onUpdateDescription: (String) -> Unit,
+    onUpdateWritingStyle: (String) -> Unit,
+    onUpdateGeneratedSettings: (String) -> Unit,
+    onGenerate: () -> Unit,
+    onConfirm: () -> Unit,
+    onNavigateToDetail: (Long) -> Unit
 ) {
-    val context = LocalContext.current
-    val app = context.applicationContext as App
-    val database = app.database
-    val preferences = app.preferences
+    val writingStyles = listOf("细腻生动", "简洁有力", "幽默风趣", "冷峻写实", "诗意唯美")
+    val genreSuggestions = listOf("玄幻", "言情", "都市", "悬疑", "科幻", "日常", "历史", "古风", "恐怖", "冒险")
 
-    val novelRepository = remember {
-        NovelRepository(database.novelDao(), database.chapterDao())
-    }
-    val grokRepository = remember {
-        val retrofit = Retrofit.Builder()
-            .baseUrl(preferences.apiBaseUrl.trimEnd('/') + "/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-        GrokRepository(retrofit.create(GrokApiService::class.java))
-    }
-
-    val viewModel: CreateNovelViewModel = viewModel(
-        factory = CreateNovelViewModel.Factory(novelRepository, grokRepository, preferences)
-    )
-
-    val uiState by viewModel.uiState.collectAsState()
-
-    // Navigate when novel is created
-    LaunchedEffect(uiState.createdNovelId) {
-        uiState.createdNovelId?.let { onNovelCreated(it) }
-    }
-
-    // Show error snackbar
-    val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(uiState.error) {
-        uiState.error?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.clearError()
+    val createdNovelId = uiState.createdNovelId
+    LaunchedEffect(createdNovelId) {
+        if (createdNovelId != null) {
+            onNavigateToDetail(createdNovelId)
         }
     }
 
@@ -68,160 +40,130 @@ fun CreateNovelScreen(
             TopAppBar(
                 title = {
                     Text(when (uiState.step) {
-                        CreateStep.INPUT -> "New Novel"
-                        CreateStep.GENERATING -> "Generating..."
-                        CreateStep.REVIEW -> "Review Settings"
-                        CreateStep.SAVING -> "Saving..."
+                        CreateStep.INPUT -> "新建小说"
+                        CreateStep.GENERATING -> "生成设定中..."
+                        CreateStep.REVIEW -> "审阅设定"
+                        CreateStep.SAVING -> "保存中..."
                     })
                 },
                 navigationIcon = {
                     if (uiState.step == CreateStep.INPUT || uiState.step == CreateStep.REVIEW) {
-                        IconButton(onClick = onNavigateBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                         }
                     }
                 }
             )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { paddingValues ->
+        }
+    ) { padding ->
         when (uiState.step) {
             CreateStep.INPUT -> {
                 Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues)
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        "Create a New Novel",
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Text(
-                        "Describe your novel idea and let AI generate the world setting, characters, and story outline.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    // Genre suggestions
-                    Text("Genre", style = MaterialTheme.typography.titleMedium)
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        val genres = listOf("Fantasy", "Romance", "Mystery", "Sci-Fi", "Comedy", "Daily")
-                        genres.forEach { genre ->
+                    Text("小说类型", style = MaterialTheme.typography.titleSmall)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        genreSuggestions.forEach { g ->
                             FilterChip(
-                                selected = uiState.genre.equals(genre, ignoreCase = true),
-                                onClick = { viewModel.updateGenre(genre) },
-                                label = { Text(genre) }
+                                selected = uiState.genre == g,
+                                onClick = { onUpdateGenre(g) },
+                                label = { Text(g) }
                             )
                         }
                     }
 
                     OutlinedTextField(
-                        value = uiState.genre,
-                        onValueChange = viewModel::updateGenre,
-                        label = { Text("Genre (or type your own)") },
+                        value = if (uiState.genre in genreSuggestions) "" else uiState.genre,
+                        onValueChange = { onUpdateGenre(it) },
+                        label = { Text("自定义类型") },
+                        placeholder = { Text("如：末世生存、校园灵异...") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
 
                     OutlinedTextField(
                         value = uiState.description,
-                        onValueChange = viewModel::updateDescription,
-                        label = { Text("Description") },
-                        placeholder = { Text("Describe your novel idea in detail...") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(150.dp),
-                        maxLines = 8
+                        onValueChange = onUpdateDescription,
+                        label = { Text("核心构思") },
+                        placeholder = { Text("描述你想写的故事核心，越具体越好...") },
+                        modifier = Modifier.fillMaxWidth().height(120.dp)
                     )
 
+                    Text("写作风格", style = MaterialTheme.typography.titleSmall)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        writingStyles.forEach { style ->
+                            FilterChip(
+                                selected = uiState.writingStyle == style,
+                                onClick = { onUpdateWritingStyle(style) },
+                                label = { Text(style) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     Button(
-                        onClick = viewModel::generateSettings,
+                        onClick = onGenerate,
                         modifier = Modifier.fillMaxWidth(),
                         enabled = uiState.genre.isNotBlank() && uiState.description.isNotBlank()
                     ) {
-                        Text("Generate Settings")
+                        Text("生成小说设定")
+                    }
+
+                    uiState.error?.let { error ->
+                        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
             CreateStep.GENERATING -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues),
-                    contentAlignment = androidx.compose.ui.Alignment.Center
-                ) {
+                Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = androidx.compose.ui.Alignment.Center) {
                     Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text("AI is generating novel settings...", style = MaterialTheme.typography.bodyLarge)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("This may take a moment", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("AI正在构思小说设定...", style = MaterialTheme.typography.bodyLarge)
+                        Text("这可能需要几十秒", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
             CreateStep.REVIEW -> {
                 Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues)
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("Review Generated Settings", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        "You can edit the generated settings before confirming.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text("AI生成的小说设定", style = MaterialTheme.typography.titleMedium)
+                    Text("你可以直接编辑下面的内容", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                     OutlinedTextField(
                         value = uiState.generatedSettings,
-                        onValueChange = viewModel::updateGeneratedSettings,
-                        label = { Text("Generated Settings") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(400.dp),
-                        maxLines = 30
+                        onValueChange = onUpdateGeneratedSettings,
+                        modifier = Modifier.fillMaxWidth().height(400.dp),
+                        label = { Text("小说设定（可编辑）") }
                     )
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
-                            onClick = viewModel::generateSettings,
+                            onClick = onGenerate,
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Regenerate")
+                            Text("重新生成")
                         }
                         Button(
-                            onClick = viewModel::confirmAndCreateNovel,
+                            onClick = onConfirm,
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Confirm & Create")
+                            Text("确认并创建")
                         }
+                    }
+
+                    uiState.error?.let { error ->
+                        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
             CreateStep.SAVING -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues),
-                    contentAlignment = androidx.compose.ui.Alignment.Center
-                ) {
-                    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                        CircularProgressIndicator()
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("Saving novel...", style = MaterialTheme.typography.bodyLarge)
-                    }
+                Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
                 }
             }
         }
