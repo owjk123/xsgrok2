@@ -3,7 +3,6 @@ package com.xsgrok2.app.utils
 import com.xsgrok2.app.data.model.Chapter
 import com.xsgrok2.app.data.model.Novel
 import java.io.File
-import java.nio.charset.Charsets
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -16,20 +15,20 @@ object ExportUtils {
         val file = File(outputDir, fileName)
 
         val sb = StringBuilder()
-        sb.appendLine("《${novel.title}》")
-        sb.appendLine("作者：AI辅助创作")
-        sb.appendLine("类型：${novel.genre}")
+        sb.appendLine("\u300A${novel.title}\u300B")
+        sb.appendLine("\u4F5C\u8005\uFF1AAI\u8F85\u52A9\u521B\u4F5C")
+        sb.appendLine("\u7C7B\u578B\uFF1A${novel.genre}")
         if (novel.writingStyle.isNotEmpty()) {
-            sb.appendLine("风格：${novel.writingStyle}")
+            sb.appendLine("\u98CE\u683C\uFF1A${novel.writingStyle}")
         }
         sb.appendLine()
-        sb.appendLine("【设定】")
+        sb.appendLine("\u3010\u8BBE\u5B9A\u3011")
         sb.appendLine(novel.worldSetting)
         sb.appendLine()
-        sb.appendLine("【角色】")
+        sb.appendLine("\u3010\u89D2\u8272\u3011")
         sb.appendLine(novel.keyCharacters)
         sb.appendLine()
-        sb.appendLine("【大纲】")
+        sb.appendLine("\u3010\u5927\u7EB2\u3011")
         sb.appendLine(novel.outline)
         sb.appendLine()
         sb.appendLine("=" .repeat(40))
@@ -41,7 +40,7 @@ object ExportUtils {
             sb.appendLine()
         }
 
-        file.writeText(sb.toString(), Charsets.UTF_8)
+        file.writeText(sb.toString())
         return file
     }
 }
