@@ -20,7 +20,8 @@ data class ChapterReaderUiState(
     val isRewriting: Boolean = false,
     val error: String? = null,
     val previousChapterId: Long? = null,
-    val nextChapterId: Long? = null
+    val nextChapterId: Long? = null,
+    val isGeneratingNext: Boolean = false
 )
 
 class ChapterReaderViewModel(
@@ -98,22 +99,34 @@ class ChapterReaderViewModel(
         _uiState.update { it.copy(isEditing = false, editContent = "") }
     }
 
-    fun rewriteSelection(selectedText: String, instruction: String, onResult: (String) -> Unit) {
+    /**
+     * AI改写 - 使用位置索引精准替换
+     * @param startIndex 选中文本在content中的起始位置
+     * @param endIndex 选中文本在content中的结束位置
+     */
+    fun rewriteSelection(startIndex: Int, endIndex: Int, instruction: String) {
         val apiKey = preferences.apiKey
         if (apiKey.isEmpty()) {
             _uiState.update { it.copy(error = "请先在设置中配置API密钥") }
             return
         }
         val novel = _uiState.value.novel ?: return
+        val content = _uiState.value.chapter?.content ?: return
+
+        if (startIndex < 0 || endIndex > content.length || startIndex >= endIndex) {
+            _uiState.update { it.copy(error = "选区无效") }
+            return
+        }
+
+        val selectedText = content.substring(startIndex, endIndex)
 
         viewModelScope.launch {
             _uiState.update { it.copy(isRewriting = true, error = null) }
             val result = grokRepository.rewriteSelection(apiKey, preferences.model, novel, selectedText, instruction)
             result.fold(
                 onSuccess = { rewritten ->
-                    // Apply rewrite: replace selected text in content
-                    val currentContent = _uiState.value.chapter?.content ?: return@fold
-                    val newContent = currentContent.replace(selectedText, rewritten)
+                    // Use position-based replace: only replace the specific range
+                    val newContent = content.substring(0, startIndex) + rewritten + content.substring(endIndex)
                     val wordCount = newContent.filter { it.code > 127 }.length
                     val chapter = _uiState.value.chapter ?: return@fold
                     novelRepository.updateChapter(chapter.copy(
@@ -123,7 +136,6 @@ class ChapterReaderViewModel(
                     ))
                     val updated = novelRepository.getChapterById(chapterId)
                     _uiState.update { it.copy(chapter = updated, isRewriting = false) }
-                    onResult(rewritten)
                 },
                 onFailure = { e ->
                     _uiState.update { it.copy(isRewriting = false, error = e.message ?: "改写失败") }
@@ -132,13 +144,99 @@ class ChapterReaderViewModel(
         }
     }
 
-    fun applyRewriteResult(rewrittenText: String, originalText: String) {
-        val currentContent = if (_uiState.value.isEditing) _uiState.value.editContent else _uiState.value.chapter?.content ?: return
-        val newContent = currentContent.replace(originalText, rewrittenText)
-        if (_uiState.value.isEditing) {
-            _uiState.update { it.copy(editContent = newContent) }
-        } else {
-            _uiState.update { it.copy(isEditing = true, editContent = newContent) }
+    /**
+     * AI改写全文
+     */
+    fun rewriteFullContent(instruction: String) {
+        val apiKey = preferences.apiKey
+        if (apiKey.isEmpty()) {
+            _uiState.update { it.copy(error = "请先在设置中配置API密钥") }
+            return
+        }
+        val novel = _uiState.value.novel ?: return
+        val content = _uiState.value.chapter?.content ?: return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRewriting = true, error = null) }
+            val result = grokRepository.rewriteSelection(apiKey, preferences.model, novel, content, instruction)
+            result.fold(
+                onSuccess = { rewritten ->
+                    val wordCount = rewritten.filter { it.code > 127 }.length
+                    val chapter = _uiState.value.chapter ?: return@fold
+                    novelRepository.updateChapter(chapter.copy(
+                        content = rewritten,
+                        wordCount = wordCount,
+                        status = "edited"
+                    ))
+                    val updated = novelRepository.getChapterById(chapterId)
+                    _uiState.update { it.copy(chapter = updated, isRewriting = false) }
+                },
+                onFailure = { e ->
+                    _uiState.update { it.copy(isRewriting = false, error = e.message ?: "改写失败") }
+                }
+            )
+        }
+    }
+
+    /**
+     * 从阅读器直接生成下一章
+     */
+    fun generateNextChapterFromReader() {
+        val apiKey = preferences.apiKey
+        if (apiKey.isEmpty()) {
+            _uiState.update { it.copy(error = "请先在设置中配置API密钥") }
+            return
+        }
+        val novel = _uiState.value.novel ?: return
+        val currentChapter = _uiState.value.chapter ?: return
+        val novelId = currentChapter.novelId
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isGeneratingNext = true, error = null) }
+            
+            val chapters = novelRepository.getChaptersByNovelId(novelId).first()
+            val nextChapterNumber = (chapters.maxOfOrNull { it.chapterNumber } ?: 0) + 1
+            val previousContent = currentChapter.content.takeLast(1500)
+            val lorebookEntries = novelRepository.getEnabledLorebookEntries(novelId)
+
+            val result = grokRepository.generateChapter(
+                apiKey = apiKey,
+                model = preferences.model,
+                novel = novel,
+                chapterNumber = nextChapterNumber,
+                chapterTitle = "第${nextChapterNumber}章",
+                previousChapterContent = previousContent,
+                lorebookEntries = lorebookEntries
+            )
+
+            result.fold(
+                onSuccess = { content ->
+                    val wordCount = content.filter { it.code > 127 }.length
+                    val chapter = Chapter(
+                        novelId = novelId,
+                        chapterNumber = nextChapterNumber,
+                        title = "第${nextChapterNumber}章",
+                        content = content,
+                        isGenerated = true,
+                        status = "generated",
+                        generationMode = "new",
+                        wordCount = wordCount
+                    )
+                    novelRepository.insertChapter(chapter)
+                    // Update total word count
+                    val updatedNovel = novel.copy(
+                        totalWordCount = novel.totalWordCount + wordCount,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    novelRepository.updateNovel(updatedNovel)
+                    // Update next chapter id
+                    val nextCh = novelRepository.getNextChapter(novelId, currentChapter.chapterNumber)
+                    _uiState.update { it.copy(isGeneratingNext = false, nextChapterId = nextCh?.id) }
+                },
+                onFailure = { e ->
+                    _uiState.update { it.copy(isGeneratingNext = false, error = e.message ?: "生成下一章失败") }
+                }
+            )
         }
     }
 

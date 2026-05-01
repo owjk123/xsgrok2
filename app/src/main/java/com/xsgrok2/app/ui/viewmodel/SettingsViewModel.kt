@@ -41,8 +41,16 @@ class SettingsViewModel(
     fun updateModel(model: String) { _uiState.update { it.copy(model = model, isSaved = false) } }
     fun updateApiBaseUrl(url: String) { _uiState.update { it.copy(apiBaseUrl = url, isSaved = false) } }
     fun updateWritingStyle(style: String) { _uiState.update { it.copy(writingStyle = style, isSaved = false) } }
-    fun updateFontSize(size: Int) { _uiState.update { it.copy(fontSize = size, isSaved = false) } }
-    fun updateNightMode(enabled: Boolean) { _uiState.update { it.copy(nightMode = enabled, isSaved = false) } }
+    
+    // fontSize and nightMode save IMMEDIATELY for instant effect
+    fun updateFontSize(size: Int) {
+        preferences.fontSize = size
+        _uiState.update { it.copy(fontSize = size) }
+    }
+    fun updateNightMode(enabled: Boolean) {
+        preferences.nightMode = enabled
+        _uiState.update { it.copy(nightMode = enabled) }
+    }
 
     fun saveSettings() {
         viewModelScope.launch {
@@ -50,8 +58,7 @@ class SettingsViewModel(
             preferences.model = _uiState.value.model
             preferences.apiBaseUrl = _uiState.value.apiBaseUrl
             preferences.writingStyle = _uiState.value.writingStyle
-            preferences.fontSize = _uiState.value.fontSize
-            preferences.nightMode = _uiState.value.nightMode
+            // fontSize and nightMode already saved immediately
             _uiState.update { it.copy(isSaved = true) }
         }
     }

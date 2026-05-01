@@ -1,8 +1,6 @@
 package com.xsgrok2.app.ui.navigation
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -10,8 +8,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.xsgrok2.app.App
-import com.xsgrok2.app.data.model.ChapterInstruction
-import com.xsgrok2.app.data.model.LorebookEntry
 import com.xsgrok2.app.data.repository.GrokRepository
 import com.xsgrok2.app.data.repository.NovelRepository
 import com.xsgrok2.app.data.api.RetrofitClient
@@ -146,12 +142,13 @@ fun NavGraph(navController: NavHostController) {
                 onStartEditing = { readerViewModel.startEditing() },
                 onSaveEdit = { content -> readerViewModel.updateEditContent(content); readerViewModel.saveEdit() },
                 onCancelEdit = { readerViewModel.cancelEdit() },
-                onRewriteSelection = { text, instruction, onResult ->
-                    readerViewModel.rewriteSelection(text, instruction, onResult)
+                onRewriteSelection = { start, end, instruction ->
+                    readerViewModel.rewriteSelection(start, end, instruction)
                 },
-                onApplyRewrite = { originalText, rewrittenText ->
-                    readerViewModel.applyRewriteResult(rewrittenText, originalText)
+                onRewriteFull = { instruction ->
+                    readerViewModel.rewriteFullContent(instruction)
                 },
+                onGenerateNextChapter = { readerViewModel.generateNextChapterFromReader() },
                 onNavigateToChapter = { newChapterId ->
                     readerViewModel.navigateToChapter(newChapterId)
                 },

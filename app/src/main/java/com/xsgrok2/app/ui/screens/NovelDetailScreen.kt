@@ -68,11 +68,10 @@ fun NovelDetailScreen(
                     IconButton(onClick = {
                         scope.launch(Dispatchers.IO) {
                             try {
-                                val dir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOCUMENTS)
-                                if (dir != null && novel != null) {
-                                    val file = ExportUtils.exportToTxt(novel, uiState.chapters, dir)
+                                if (novel != null) {
+                                    val file = ExportUtils.exportToTxt(novel, uiState.chapters, context)
                                     scope.launch(Dispatchers.Main) {
-                                        Toast.makeText(context, "已导出到: ${file.name}", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "已导出到Download: ${file.name}", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             } catch (e: Exception) {
@@ -519,9 +518,9 @@ private fun NovelSettingsDialog(
     onRegenerateSettings: () -> Unit,
     isGenerating: Boolean
 ) {
-    var worldSetting by remember { mutableStateOf(novel.worldSetting) }
-    var keyCharacters by remember { mutableStateOf(novel.keyCharacters) }
-    var outline by remember { mutableStateOf(novel.outline) }
+    var worldSetting by remember(novel.worldSetting) { mutableStateOf(novel.worldSetting) }
+    var keyCharacters by remember(novel.keyCharacters) { mutableStateOf(novel.keyCharacters) }
+    var outline by remember(novel.outline) { mutableStateOf(novel.outline) }
     var currentTab by remember { mutableStateOf(0) }
 
     AlertDialog(

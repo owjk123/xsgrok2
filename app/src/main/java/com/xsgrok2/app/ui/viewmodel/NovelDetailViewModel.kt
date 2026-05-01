@@ -107,23 +107,22 @@ class NovelDetailViewModel(
                 lorebookEntries = lorebookEntries
             )
             result.fold(
-                onSuccess = { content ->
-                    val wordCount = content.filter { it.code > 127 }.length
+                onSuccess = { generatedContent ->
+                    val wordCount = generatedContent.filter { it.code > 127 }.length
                     val chapter = Chapter(
                         novelId = novelId,
                         chapterNumber = chapterNumber,
                         title = "第${chapterNumber}章",
                         customTitle = customTitle,
-                        content = content,
+                        content = generatedContent,
                         isGenerated = true,
                         status = "generated",
                         generationMode = mode,
                         userNote = userNote,
                         wordCount = wordCount
                     )
-                    novelRepository.insertChapter(chapter)
-                    // Save instruction if provided
-                    val savedChapterId = novelRepository.getChapterByNumber(novelId, chapterNumber)?.id ?: return@fold
+                    val savedChapterId = novelRepository.insertChapter(chapter)
+                    // Save instruction if provided - use the returned ID directly
                     if (instruction != null) {
                         novelRepository.insertInstruction(instruction.copy(chapterId = savedChapterId, novelId = novelId))
                     }
@@ -369,12 +368,19 @@ class NovelDetailViewModel(
         val lines = text.lines()
         val result = StringBuilder()
         var inSection = false
+
         for (line in lines) {
             val trimmed = line.trim()
-            val isHeader = trimmed.startsWith("#") ||
-                    trimmed.matches(Regex("^[一二三四五六七八九十]+[、．.].*")) ||
-                    (trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4)
-            if (isHeader) {
+            val hashCount = trimmed.takeWhile { it == '#' }.length
+
+            val isTopLevelHeader = when {
+                hashCount in 1..2 -> true
+                trimmed.matches(Regex("^[一二三四五六七八九十]+[、．.].*")) -> true
+                trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4 -> true
+                else -> false
+            }
+
+            if (isTopLevelHeader) {
                 if (inSection) break
                 if (sectionHeaders.any { header -> trimmed.contains(header) }) {
                     inSection = true

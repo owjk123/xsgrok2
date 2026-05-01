@@ -1,0 +1,156 @@
+**xsgrok2 v3.1 迭代方案（结构化写作专业化·可靠性与流畅度）**
+
+### 一、迭代目标与版本定位
+综合产品经理与深度用户反馈后，我们判断 **v3.1 的核心使命是“把能用的工具升级为敢用的工具”**。重点解决以下三类问题：
+1. **P0 信任危机**（流式输出、数据一致性、解析脆弱性、Lorebook 低效）；
+2. **读写操作面割裂**（阅读态创作路径过深）；
+3. **核心竞争力释放**（结构化控制能力从“可用”到“优雅”）。
+
+**版本命名建议**：**v3.1「流畅可控」**。不贸然跳 v4.0，先把基础的可靠性、流畅度和记忆精准度打扎实，为后续「智能记忆系统」打好地基。
+
+---
+
+### 二、v3.1 完整功能清单（P0/P1/P2）
+
+#### **P0（必须完成，影响核心可用性与信任）**
+1. 实现流式输出（SSE）
+2. 重构 Chapter 与 ChapterInstruction 原子创建与关联机制（解决 id 不一致和删除后序号错位）
+3. Lorebook 注入从“全量”改为“关键词+importance+章节相关性召回”
+4. 将 extractSection 改为 AI 结构化 JSON 输出（彻底解决解析脆弱性）
+5. AI 改写（rewrite）改为基于位置（start/end index）的精准替换
+6. 在 ChapterReaderScreen 增加底部快捷创作工具栏（生成下一章、编辑本章指令、快速添加 Lorebook）
+
+#### **P1（强烈建议本版本完成，显著提升专业度）**
+7. 编辑态自动保存 + 本地草稿恢复机制
+8. 实现章节批量生成 + 生成队列管理（支持后台连续生成）
+9. 建立并实施清晰的状态机规范（ChapterStatus × GenerationMode 语义矩阵）
+10. 增加前文摘要（Summary）机制（每 6 章自动生成一次，注入上下文）
+
+#### **P2（按资源排期，可部分延后）**
+11. 章节版本历史初步实现（生成后自动保存版本，支持单版本回滚）
+12. NovelDetailScreen UI 重构（将多个 Dialog 改为 BottomSheet + 独立路由，降低认知负荷）
+
+---
+
+### 三、详细迭代方案
+
+#### **P0-1 实现流式输出**
+**问题**：生成时界面完全卡死，用户无法感知进度，体验极差。
+**方案**：后端通过 Retrofit + OkHttp 支持 Server-Sent Events（`text/event-stream`），前端使用 `Flow` + `MutableStateFlow` 在 Compose 中实时追加文本。增加“正在思考”“生成中”动画与停止按钮。
+**涉及文件**：
+- `data/remote/GrokApiService.kt`（新增 `@Streaming` 方法）
+- `repository/GenerationRepository.kt`
+- `ui/reader/ChapterReaderScreen.kt`、`viewmodel/ChapterViewModel.kt`
+- `ui/components/StreamingTextField.kt`
+**复杂度**：高（涉及流式解析、UI 平滑追加、错误恢复、取消逻辑）
+
+#### **P0-2 重构 Chapter 与 ChapterInstruction 关联机制**
+**问题**：并发/删除重排导致 id 不一致，属于架构性技术债。
+**方案**：采用 Room `@Transaction` + “先创建 Chapter 占位，再原子创建 Instruction”的模式。Chapter 增加 `stableId`（UUID），Instruction 通过 `chapterStableId` 强关联，而非仅 `chapterId`。删除 Chapter 时使用级联 + 自动重排 Instruction 的 `chapterOrder`。
+**涉及文件**：
+- `data/entity/Chapter.kt`、`ChapterInstruction.kt`（新增 stableId、order 字段）
+- `data/dao/ChapterDao.kt`、`ChapterInstructionDao.kt`（新增事务方法）
+- `data/migration/Migration_3_4.kt`（Room 数据库迁移）
+- `repository/NovelRepository.kt`
+**复杂度**：高（需谨慎处理数据迁移与历史数据兼容）
+
+#### **P0-3 Lorebook 智能召回机制**
+**问题**：全量注入浪费 token 且干扰当前章节焦点。
+**方案**：在生成前，由 AI 先对当前章节 Instruction + 前文 Summary 提取关键词，再对 Lorebook 按 `importance + 关键词匹配度` 排序过滤（前 8-12 条）。注入 Prompt 时增加“当前章节相关 Lorebook”分区。
+**涉及文件**：
+- `domain/usecase/GenerateLorebookContextUseCase.kt`（新增）
+- `repository/LorebookRepository.kt`
+- `prompt/PromptBuilder.kt`
+- `data/entity/LorebookEntry.kt`（可增加 embedding 字段，为后续向量检索做准备）
+**复杂度**：中
+
+#### **P0-4 extractSection 改为结构化 JSON 输出**
+**问题**：字符串解析极其脆弱，AI 格式稍有偏差即失败。
+**方案**：修改 Prompt 要求 Grok 以固定 JSON Schema 输出（title, content, instruction 等），前端使用 kotlinx.serialization 解析。保留降级字符串解析作为兜底。
+**涉及文件**：
+- `prompt/PromptTemplates.kt`（新增 JSON mode prompt）
+- `domain/usecase/ParseGenerationResultUseCase.kt`
+- `ui/components/JsonParseErrorDialog.kt`（降级处理）
+**复杂度**：中
+
+#### **P0-5 AI 改写改为基于位置的精准替换**
+**问题**：文本匹配导致多处相同内容被误替换。
+**方案**：在 UI 层记录选中内容的 `startIndex` 和 `endIndex`（基于当前文本快照），生成后使用 `replaceRange` 精准替换。同时保存修改前的快照用于版本回滚。
+**涉及文件**：
+- `ui/reader/ChapterReaderScreen.kt`（选中逻辑增强）
+- `viewmodel/ChapterViewModel.kt`
+- `domain/model/ReplaceOperation.kt`（新增）
+**复杂度**：中
+
+#### **P0-6 ChapterReaderScreen 快捷创作工具栏**
+**问题**：从阅读态跳回 NovelDetailScreen 操作成本过高。
+**方案**：在 Reader 底部增加可折叠的 `ActionBar`（Compose BottomAppBar + 图标按钮），支持「下一章」「本章指令」「快速 Lorebook」「改写模式」等快捷入口。点击后使用 Navigation 或 BottomSheet 呈现对应操作面。
+**涉及文件**：
+- `ui/reader/ChapterReaderScreen.kt`
+- `ui/reader/components/ReaderActionBar.kt`（新增）
+- `ui/reader/ChapterInstructionSheet.kt`
+**复杂度**：中
+
+#### **P1-7 编辑态自动保存 + 本地草稿**
+**问题**：用户担心崩溃或误操作导致内容丢失。
+**方案**：使用 Room 建立 `ChapterDraft` 表，结合 `TextField` 的 `onValueChange` 防抖（800ms）自动保存。应用启动或打开章节时检查是否存在未同步草稿，提示恢复。
+**涉及文件**：
+- `data/entity/ChapterDraft.kt`（新增）
+- `data/dao/ChapterDraftDao.kt`
+- `data/migration/Migration_4_5.kt`
+- `viewmodel/ChapterViewModel.kt`
+**复杂度**：中
+
+#### **P1-8 章节批量生成 + 队列管理**
+**问题**：长篇写作需要连续生成多章。
+**方案**：新增 `GenerationTask` 实体与队列，使用 WorkManager 后台执行（可前台 Service 展示进度）。支持暂停、优先级调整。队列状态在 NovelDetailScreen 和 Reader 中展示。
+**涉及文件**：
+- `data/entity/GenerationTask.kt`（新增）
+- `data/dao/GenerationTaskDao.kt`
+- `workmanager/ChapterGenerationWorker.kt`
+- `repository/GenerationQueueRepository.kt`
+**复杂度**：高
+
+#### **P1-9 状态机规范与实现**
+**问题**：status 与 generationMode 语义混乱，未来易出 bug。
+**方案**：建立 `ChapterStateMachine` 类，定义清晰的状态转移矩阵（文档化），并在 ViewModel 和 Repository 中强制使用状态机进行所有状态变更。
+**涉及文件**：
+- `domain/statemachine/ChapterStateMachine.kt`（新增）
+- `domain/model/ChapterStatus.kt`、`GenerationMode.kt`
+- `viewmodel/ChapterViewModel.kt`
+**复杂度**：中
+
+#### **P1-10 前文摘要机制**
+**问题**：长上下文缺乏记忆蒸馏。
+**方案**：每生成 6 章后，自动调用 Summary API 生成前文摘要，保存至 `ChapterSummary` 表。在后续生成 Prompt 中优先注入最近 2 条 Summary。
+**涉及文件**：
+- `data/entity/ChapterSummary.kt`（新增）
+- `domain/usecase/GenerateSummaryUseCase.kt`
+- `prompt/PromptBuilder.kt`
+- `data/migration/Migration_5_6.kt`
+**复杂度**：中
+
+#### **P2-11 章节版本历史（初步）**
+**方案**：生成/重大修改后自动保存 `ChapterVersion`（content + timestamp + reason）。在 Reader 中增加“版本历史”入口，支持回滚到指定版本。
+**涉及文件**：`data/entity/ChapterVersion.kt`、`ChapterVersionDao.kt` 等。
+**复杂度**：高（暂缓至 v3.2 完整实现，本版本只做保存）
+
+#### **P2-12 NovelDetailScreen UI 重构**
+**方案**：将原有多个 `AlertDialog` 改为 `ModalBottomSheet` + `Navigation` 子路由，降低单页面复杂度。
+**涉及文件**：`ui/detail/NovelDetailScreen.kt`、`ui/detail/components/*`。
+**复杂度**：中
+
+---
+
+### 四、数据库迁移策略
+- 当前 Schema Version 假设为 3。
+- v3.1 将升级至 **Version 6**。
+- 所有 Migration 均提供 `Migration_3_4`、`Migration_4_5`、`Migration_5_6`，严格测试空数据库、已有数据、异常回滚场景。
+- 重点保证用户历史小说数据不丢失，特别是 ChapterInstruction 的关联关系。
+
+---
+
+**技术负责人总结**：
+v3.1 将重点攻克**流式输出、数据一致性、智能 Lorebook、JSON 结构化输出、读写操作打通** 这五个最痛点。完成上述 P0+P1 后，产品将从“可用但别扭”进化到“真正好用且可靠”，为后续记忆系统与版本管理奠定坚实基础。
+
+需要我继续输出《数据库迁移详细脚本》《状态机矩阵文档》或《各模块技术实现时间评估表》吗？

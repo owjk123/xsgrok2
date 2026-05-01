@@ -148,15 +148,28 @@ class CreateNovelViewModel(
         val lines = text.lines()
         val result = StringBuilder()
         var inSection = false
+        var headerDepth = 0  // Track markdown header depth
 
         for (line in lines) {
             val trimmed = line.trim()
-            val isHeader = trimmed.startsWith("#") ||
-                    trimmed.matches(Regex("^[一二三四五六七八九十]+[、．.].*")) ||
-                    (trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4)
+            
+            // Only detect TOP-LEVEL section headers (the 三大板块分割线)
+            // Top-level: starts with ### or fewer #, or matches 一二三、 pattern, or **bold** title
+            // Sub-level: starts with #### or more #, or "- " list items, or "第X章" patterns
+            val hashCount = trimmed.takeWhile { it == '#' }.length
+            
+            val isTopLevelHeader = when {
+                // Markdown headers: only ## or fewer (### and #### are sub-headers within a section)
+                hashCount in 1..2 -> true
+                // Chinese numbered headers: 一、二、三、etc (top-level section markers)
+                trimmed.matches(Regex("^[一二三四五六七八九十]+[、．.].*")) -> true
+                // Bold text as section header
+                trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4 -> true
+                else -> false
+            }
 
-            if (isHeader) {
-                if (inSection) break
+            if (isTopLevelHeader) {
+                if (inSection) break  // End of current section
                 if (sectionHeaders.any { header -> trimmed.contains(header) }) {
                     inSection = true
                     continue
