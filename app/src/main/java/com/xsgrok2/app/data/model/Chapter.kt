@@ -2,8 +2,8 @@ package com.xsgrok2.app.data.model
 
 import androidx.room.Entity
 import androidx.room.ForeignKey
-import androidx.room.PrimaryKey
 import androidx.room.Index
+import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "chapters",
@@ -30,6 +30,10 @@ data class Chapter(
     val generationMode: String = "new",
     val userNote: String = "",
     val wordCount: Int = 0,
+    val summary: String = "",
+    val keyEvents: String = "",
+    val characterStateSnapshot: String = "",
+    val qualityScore: Float? = null,
     val createdAt: Long = System.currentTimeMillis()
 ) {
     fun displayTitle(): String = if (customTitle.isNotBlank()) customTitle else title
