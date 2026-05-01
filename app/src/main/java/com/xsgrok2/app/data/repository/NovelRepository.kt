@@ -2,10 +2,12 @@ package com.xsgrok2.app.data.repository
 
 import com.xsgrok2.app.data.dao.ChapterDao
 import com.xsgrok2.app.data.dao.ChapterInstructionDao
+import com.xsgrok2.app.data.dao.CharacterStateDao
 import com.xsgrok2.app.data.dao.LorebookEntryDao
 import com.xsgrok2.app.data.dao.NovelDao
 import com.xsgrok2.app.data.model.Chapter
 import com.xsgrok2.app.data.model.ChapterInstruction
+import com.xsgrok2.app.data.model.CharacterState
 import com.xsgrok2.app.data.model.LorebookEntry
 import com.xsgrok2.app.data.model.Novel
 import kotlinx.coroutines.flow.Flow
@@ -14,9 +16,9 @@ class NovelRepository(
     private val novelDao: NovelDao,
     private val chapterDao: ChapterDao,
     private val lorebookEntryDao: LorebookEntryDao,
-    private val chapterInstructionDao: ChapterInstructionDao
+    private val chapterInstructionDao: ChapterInstructionDao,
+    private val characterStateDao: CharacterStateDao
 ) {
-    // Novel operations
     fun getAllNovels(): Flow<List<Novel>> = novelDao.getAllNovels()
     suspend fun getNovelById(id: Long): Novel? = novelDao.getNovelById(id)
     fun getNovelByIdFlow(id: Long): Flow<Novel?> = novelDao.getNovelByIdFlow(id)
@@ -25,7 +27,6 @@ class NovelRepository(
     suspend fun deleteNovel(novel: Novel) = novelDao.deleteNovel(novel)
     suspend fun deleteNovelById(id: Long) = novelDao.deleteNovelById(id)
 
-    // Chapter operations
     fun getChaptersByNovelId(novelId: Long): Flow<List<Chapter>> = chapterDao.getChaptersByNovelId(novelId)
     suspend fun getChapterById(id: Long): Chapter? = chapterDao.getChapterById(id)
     suspend fun getChapterByNumber(novelId: Long, chapterNumber: Int): Chapter? = chapterDao.getChapterByNumber(novelId, chapterNumber)
@@ -42,7 +43,6 @@ class NovelRepository(
     suspend fun shiftChaptersDown(novelId: Long, fromPosition: Int) = chapterDao.shiftChaptersDown(novelId, fromPosition)
     suspend fun shiftChaptersUp(novelId: Long, deletedPosition: Int) = chapterDao.shiftChaptersUp(novelId, deletedPosition)
 
-    // Lorebook operations
     fun getLorebookEntries(novelId: Long): Flow<List<LorebookEntry>> = lorebookEntryDao.getEntriesByNovelId(novelId)
     suspend fun getEnabledLorebookEntries(novelId: Long): List<LorebookEntry> = lorebookEntryDao.getEnabledEntries(novelId)
     suspend fun getLorebookEntryById(id: Long): LorebookEntry? = lorebookEntryDao.getEntryById(id)
@@ -51,11 +51,20 @@ class NovelRepository(
     suspend fun deleteLorebookEntry(entry: LorebookEntry) = lorebookEntryDao.deleteEntry(entry)
     suspend fun deleteLorebookEntriesByNovelId(novelId: Long) = lorebookEntryDao.deleteEntriesByNovelId(novelId)
 
-    // ChapterInstruction operations
     suspend fun getInstructionByChapterId(chapterId: Long): ChapterInstruction? = chapterInstructionDao.getInstructionByChapterId(chapterId)
     fun getInstructionsByNovelId(novelId: Long): Flow<List<ChapterInstruction>> = chapterInstructionDao.getInstructionsByNovelId(novelId)
     suspend fun insertInstruction(instruction: ChapterInstruction): Long = chapterInstructionDao.insertInstruction(instruction)
     suspend fun updateInstruction(instruction: ChapterInstruction) = chapterInstructionDao.updateInstruction(instruction)
     suspend fun deleteInstruction(instruction: ChapterInstruction) = chapterInstructionDao.deleteInstruction(instruction)
     suspend fun deleteInstructionByChapterId(chapterId: Long) = chapterInstructionDao.deleteByChapterId(chapterId)
+
+    fun getCharacterStatesByNovelId(novelId: Long): Flow<List<CharacterState>> = characterStateDao.getCharacterStatesByNovelId(novelId)
+    suspend fun getCharacterStatesByNovelIdSync(novelId: Long): List<CharacterState> = characterStateDao.getCharacterStatesByNovelIdSync(novelId)
+    suspend fun getCharacterStateByName(novelId: Long, characterName: String): CharacterState? = characterStateDao.getCharacterStateByName(novelId, characterName)
+    suspend fun getCharacterStatesByChapter(novelId: Long, chapterNumber: Int): List<CharacterState> = characterStateDao.getCharacterStatesByChapter(novelId, chapterNumber)
+    suspend fun insertCharacterState(characterState: CharacterState): Long = characterStateDao.insertCharacterState(characterState)
+    suspend fun insertCharacterStates(characterStates: List<CharacterState>) = characterStateDao.insertCharacterStates(characterStates)
+    suspend fun updateCharacterState(characterState: CharacterState) = characterStateDao.updateCharacterState(characterState)
+    suspend fun deleteCharacterState(characterState: CharacterState) = characterStateDao.deleteCharacterState(characterState)
+    suspend fun deleteCharacterStatesByNovelId(novelId: Long) = characterStateDao.deleteCharacterStatesByNovelId(novelId)
 }

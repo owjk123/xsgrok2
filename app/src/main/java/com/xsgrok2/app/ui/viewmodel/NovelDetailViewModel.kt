@@ -3,13 +3,10 @@ package com.xsgrok2.app.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.xsgrok2.app.data.model.Chapter
-import com.xsgrok2.app.data.model.ChapterInstruction
-import com.xsgrok2.app.data.model.LorebookEntry
-import com.xsgrok2.app.data.model.Novel
+import com.google.gson.Gson
+import com.xsgrok2.app.data.model.*
 import com.xsgrok2.app.data.preferences.AppPreferences
-import com.xsgrok2.app.data.repository.GrokRepository
-import com.xsgrok2.app.data.repository.NovelRepository
+import com.xsgrok2.app.data.repository.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -17,24 +14,29 @@ data class NovelDetailUiState(
     val novel: Novel? = null,
     val chapters: List<Chapter> = emptyList(),
     val lorebookEntries: List<LorebookEntry> = emptyList(),
+    val characterStates: List<CharacterState> = emptyList(),
     val isLoading: Boolean = false,
     val isGenerating: Boolean = false,
+    val generationStage: String = "",
     val error: String? = null,
     val nextChapterNumber: Int = 1,
     val isEditingSettings: Boolean = false,
     val editingField: String = "",
-    val editingContent: String = ""
+    val editingContent: String = "",
+    val lastQualityScore: Float? = null
 )
 
 class NovelDetailViewModel(
     private val novelId: Long,
     private val novelRepository: NovelRepository,
     private val grokRepository: GrokRepository,
+    private val memoryService: MemoryService,
+    private val critiqueService: CritiqueService,
     private val preferences: AppPreferences
 ) : ViewModel() {
-
     private val _uiState = MutableStateFlow(NovelDetailUiState())
     val uiState: StateFlow<NovelDetailUiState> = _uiState.asStateFlow()
+    private val gson = Gson()
 
     init {
         viewModelScope.launch {
@@ -45,12 +47,7 @@ class NovelDetailViewModel(
         }
         viewModelScope.launch {
             novelRepository.getChaptersByNovelId(novelId).collect { chapters ->
-                _uiState.update {
-                    it.copy(
-                        chapters = chapters,
-                        nextChapterNumber = (chapters.maxOfOrNull { c -> c.chapterNumber } ?: 0) + 1
-                    )
-                }
+                _uiState.update { it.copy(chapters = chapters, nextChapterNumber = (chapters.maxOfOrNull { c -> c.chapterNumber } ?: 0) + 1) }
             }
         }
         viewModelScope.launch {
@@ -58,166 +55,109 @@ class NovelDetailViewModel(
                 _uiState.update { it.copy(lorebookEntries = entries) }
             }
         }
+        viewModelScope.launch {
+            novelRepository.getCharacterStatesByNovelId(novelId).collect { states ->
+                _uiState.update { it.copy(characterStates = states) }
+            }
+        }
     }
 
-    // === Generate new chapter at next position ===
-    fun generateNextChapter(
-        customTitle: String = "",
-        instruction: ChapterInstruction? = null,
-        userNote: String = ""
-    ) {
+    fun generateNextChapter(customTitle: String = "", instruction: ChapterInstruction? = null, userNote: String = "") {
         val chapterNumber = _uiState.value.nextChapterNumber
         generateChapterAt(chapterNumber, customTitle, instruction, userNote, "new")
     }
 
-    // === Generate chapter at specific position (insert) ===
-    fun generateChapterAt(
-        chapterNumber: Int,
-        customTitle: String = "",
-        instruction: ChapterInstruction? = null,
-        userNote: String = "",
-        mode: String = "new"
-    ) {
+    fun generateChapterAt(chapterNumber: Int, customTitle: String = "", instruction: ChapterInstruction? = null, userNote: String = "", mode: String = "new") {
         val apiKey = preferences.apiKey
-        if (apiKey.isEmpty()) {
-            _uiState.update { it.copy(error = "请先在设置中配置API密钥") }
-            return
-        }
+        if (apiKey.isEmpty()) { _uiState.update { it.copy(error = "请先在设置中配置API密钥") }; return }
         val novel = _uiState.value.novel ?: return
         val title = if (customTitle.isNotBlank()) customTitle else "第${chapterNumber}章"
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isGenerating = true, error = null) }
-            val previousContent = _uiState.value.chapters
-                .filter { it.chapterNumber < chapterNumber }
-                .maxByOrNull { it.chapterNumber }
-                ?.content?.takeLast(1500) ?: ""
+            _uiState.update { it.copy(isGenerating = true, error = null, generationStage = "准备中...") }
+            try {
+                val memoryStream = memoryService.buildMemoryStream(novelId, chapterNumber, novelRepository)
+                val characterStates = novelRepository.getCharacterStatesByNovelIdSync(novelId)
+                val previousContent = novelRepository.getPreviousChapter(novelId, chapterNumber)?.content ?: ""
+                val lorebookEntries = novelRepository.getEnabledLorebookEntries(novelId)
 
-            val lorebookEntries = novelRepository.getEnabledLorebookEntries(novelId)
+                val result = grokRepository.generateChapter(apiKey, preferences.model, novel, chapterNumber, title, previousContent, userNote, instruction, lorebookEntries, memoryStream, characterStates) { stage -> _uiState.update { it.copy(generationStage = stage) } }
 
-            val result = grokRepository.generateChapter(
-                apiKey = apiKey,
-                model = preferences.model,
-                novel = novel,
-                chapterNumber = chapterNumber,
-                chapterTitle = title,
-                previousChapterContent = previousContent,
-                userNote = userNote,
-                instruction = instruction,
-                lorebookEntries = lorebookEntries
-            )
-            result.fold(
-                onSuccess = { generatedContent ->
-                    val wordCount = generatedContent.filter { it.code > 127 }.length
-                    val chapter = Chapter(
-                        novelId = novelId,
-                        chapterNumber = chapterNumber,
-                        title = "第${chapterNumber}章",
-                        customTitle = customTitle,
-                        content = generatedContent,
-                        isGenerated = true,
-                        status = "generated",
-                        generationMode = mode,
-                        userNote = userNote,
-                        wordCount = wordCount
-                    )
-                    val savedChapterId = novelRepository.insertChapter(chapter)
-                    // Save instruction if provided - use the returned ID directly
-                    if (instruction != null) {
-                        novelRepository.insertInstruction(instruction.copy(chapterId = savedChapterId, novelId = novelId))
-                    }
-                    updateNovelWordCount(novel)
-                    _uiState.update { it.copy(isGenerating = false) }
-                },
-                onFailure = { e ->
-                    _uiState.update {
-                        it.copy(isGenerating = false, error = e.message ?: "生成章节失败")
-                    }
-                }
-            )
+                result.fold(
+                    onSuccess = { generatedContent ->
+                        _uiState.update { it.copy(generationStage = "正在进行质量审查...") }
+                        val memoryStreamStr = memoryService.memoryStreamToString(memoryStream)
+                        val characterStatesJson = memoryService.characterStatesToJson(characterStates)
+                        val critiqueResult = critiqueService.critiqueWithRetry(generatedContent, characterStatesJson, memoryStreamStr, apiKey, preferences.model) { stage -> _uiState.update { it.copy(generationStage = stage) } }
+                        val finalContent = critiqueResult.revisedPassage.ifEmpty { generatedContent }
+
+                        val summaryResult = memoryService.generateChapterSummary(Chapter(novelId = novelId, chapterNumber = chapterNumber, title = title, content = finalContent), novel, apiKey, preferences.model)
+
+                        val wordCount = finalContent.filter { it.code > 127 }.length
+                        val chapter = Chapter(novelId = novelId, chapterNumber = chapterNumber, title = "第${chapterNumber}章", customTitle = customTitle, content = finalContent, isGenerated = true, status = "generated", generationMode = mode, userNote = userNote, wordCount = wordCount, summary = summaryResult.getOrNull()?.summary ?: "", keyEvents = gson.toJson(summaryResult.getOrNull()?.keyEvents ?: emptyList<String>()), qualityScore = critiqueResult.overallScore.toFloat() / 100f)
+
+                        val savedChapterId = novelRepository.insertChapter(chapter)
+                        if (instruction != null) novelRepository.insertInstruction(instruction.copy(chapterId = savedChapterId, novelId = novelId))
+
+                        summaryResult.getOrNull()?.let { summary ->
+                            memoryService.updateCharacterStatesFromSummary(novelId, chapterNumber, summary, characterStates, novelRepository)
+                        }
+                        updateNovelWordCount(novel)
+                        _uiState.update { it.copy(isGenerating = false, generationStage = "", lastQualityScore = critiqueResult.overallScore.toFloat() / 100f) }
+                    },
+                    onFailure = { e -> _uiState.update { it.copy(isGenerating = false, generationStage = "", error = e.message ?: "生成章节失败") } }
+                )
+            } catch (e: Exception) { _uiState.update { it.copy(isGenerating = false, generationStage = "", error = e.message ?: "生成章节失败") } }
         }
     }
 
-    // === Insert chapter at position (shift existing chapters down) ===
-    fun insertChapterAt(
-        position: Int,
-        customTitle: String = "",
-        instruction: ChapterInstruction? = null,
-        userNote: String = ""
-    ) {
+    fun insertChapterAt(position: Int, customTitle: String = "", instruction: ChapterInstruction? = null, userNote: String = "") {
         viewModelScope.launch {
             novelRepository.shiftChaptersDown(novelId, position)
             generateChapterAt(position, customTitle, instruction, userNote, "insert")
         }
     }
 
-    // === Regenerate existing chapter ===
-    fun regenerateChapter(
-        chapterId: Long,
-        mode: String = "rewrite",
-        instruction: ChapterInstruction? = null,
-        userNote: String = ""
-    ) {
+    fun regenerateChapter(chapterId: Long, mode: String = "rewrite", instruction: ChapterInstruction? = null, userNote: String = "") {
         val apiKey = preferences.apiKey
-        if (apiKey.isEmpty()) {
-            _uiState.update { it.copy(error = "请先在设置中配置API密钥") }
-            return
-        }
+        if (apiKey.isEmpty()) { _uiState.update { it.copy(error = "请先在设置中配置API密钥") }; return }
         val novel = _uiState.value.novel ?: return
 
         viewModelScope.launch {
             val chapter = novelRepository.getChapterById(chapterId) ?: return@launch
-            _uiState.update { it.copy(isGenerating = true, error = null) }
+            _uiState.update { it.copy(isGenerating = true, error = null, generationStage = "准备中...") }
+            try {
+                val memoryStream = memoryService.buildMemoryStream(novelId, chapter.chapterNumber, novelRepository)
+                val characterStates = novelRepository.getCharacterStatesByNovelIdSync(novelId)
+                val previousContent = novelRepository.getPreviousChapter(novelId, chapter.chapterNumber)?.content ?: ""
+                val lorebookEntries = novelRepository.getEnabledLorebookEntries(novelId)
 
-            val previousContent = novelRepository.getPreviousChapter(novelId, chapter.chapterNumber)
-                ?.content?.takeLast(1500) ?: ""
+                val result = grokRepository.regenerateChapter(apiKey, preferences.model, novel, chapter.chapterNumber, chapter.displayTitle(), previousContent, chapter.content, mode, instruction, userNote, lorebookEntries, memoryStream, characterStates) { stage -> _uiState.update { it.copy(generationStage = stage) } }
 
-            val lorebookEntries = novelRepository.getEnabledLorebookEntries(novelId)
+                result.fold(
+                    onSuccess = { content ->
+                        _uiState.update { it.copy(generationStage = "正在进行质量审查...") }
+                        val memoryStreamStr = memoryService.memoryStreamToString(memoryStream)
+                        val characterStatesJson = memoryService.characterStatesToJson(characterStates)
+                        val critiqueResult = critiqueService.critiqueWithRetry(content, characterStatesJson, memoryStreamStr, apiKey, preferences.model) { stage -> _uiState.update { it.copy(generationStage = stage) } }
+                        val finalContent = critiqueResult.revisedPassage.ifEmpty { content }
 
-            val result = grokRepository.regenerateChapter(
-                apiKey = apiKey,
-                model = preferences.model,
-                novel = novel,
-                chapterNumber = chapter.chapterNumber,
-                chapterTitle = chapter.displayTitle(),
-                previousChapterContent = previousContent,
-                currentContent = chapter.content,
-                mode = mode,
-                instruction = instruction,
-                userNote = userNote,
-                lorebookEntries = lorebookEntries
-            )
-            result.fold(
-                onSuccess = { content ->
-                    val wordCount = content.filter { it.code > 127 }.length
-                    novelRepository.updateChapter(chapter.copy(
-                        content = content,
-                        wordCount = wordCount,
-                        status = if (mode == "improve") "edited" else "generated",
-                        generationMode = mode,
-                        userNote = userNote
-                    ))
-                    if (instruction != null) {
-                        val existing = novelRepository.getInstructionByChapterId(chapterId)
-                        if (existing != null) {
-                            novelRepository.updateInstruction(instruction.copy(id = existing.id, chapterId = chapterId, novelId = novelId))
-                        } else {
-                            novelRepository.insertInstruction(instruction.copy(chapterId = chapterId, novelId = novelId))
+                        val wordCount = finalContent.filter { it.code > 127 }.length
+                        novelRepository.updateChapter(chapter.copy(content = finalContent, wordCount = wordCount, status = if (mode == "improve") "edited" else "generated", generationMode = mode, userNote = userNote, qualityScore = critiqueResult.overallScore.toFloat() / 100f))
+                        if (instruction != null) {
+                            val existing = novelRepository.getInstructionByChapterId(chapterId)
+                            if (existing != null) novelRepository.updateInstruction(instruction.copy(id = existing.id, chapterId = chapterId, novelId = novelId))
+                            else novelRepository.insertInstruction(instruction.copy(chapterId = chapterId, novelId = novelId))
                         }
-                    }
-                    updateNovelWordCount(novel)
-                    _uiState.update { it.copy(isGenerating = false) }
-                },
-                onFailure = { e ->
-                    _uiState.update {
-                        it.copy(isGenerating = false, error = e.message ?: "重新生成失败")
-                    }
-                }
-            )
+                        updateNovelWordCount(novel)
+                        _uiState.update { it.copy(isGenerating = false, generationStage = "", lastQualityScore = critiqueResult.overallScore.toFloat() / 100f) }
+                    },
+                    onFailure = { e -> _uiState.update { it.copy(isGenerating = false, generationStage = "", error = e.message ?: "重新生成失败") } }
+                )
+            } catch (e: Exception) { _uiState.update { it.copy(isGenerating = false, generationStage = "", error = e.message ?: "重新生成失败") } }
         }
     }
 
-    // === Delete single chapter ===
     fun deleteChapter(chapterId: Long) {
         viewModelScope.launch {
             val chapter = novelRepository.getChapterById(chapterId) ?: return@launch
@@ -228,7 +168,6 @@ class NovelDetailViewModel(
         }
     }
 
-    // === Update chapter title ===
     fun updateChapterTitle(chapterId: Long, customTitle: String) {
         viewModelScope.launch {
             val chapter = novelRepository.getChapterById(chapterId) ?: return@launch
@@ -236,45 +175,30 @@ class NovelDetailViewModel(
         }
     }
 
-    // === Update chapter content (manual edit) ===
     fun updateChapterContent(chapterId: Long, newContent: String) {
         viewModelScope.launch {
             val chapter = novelRepository.getChapterById(chapterId) ?: return@launch
             val wordCount = newContent.filter { it.code > 127 }.length
-            novelRepository.updateChapter(chapter.copy(
-                content = newContent,
-                wordCount = wordCount,
-                status = "edited"
-            ))
+            novelRepository.updateChapter(chapter.copy(content = newContent, wordCount = wordCount, status = "edited"))
             _uiState.value.novel?.let { updateNovelWordCount(it) }
         }
     }
 
-    // === AI rewrite selected text ===
     fun rewriteSelection(chapterId: Long, selectedText: String, instruction: String, onResult: (String) -> Unit) {
         val apiKey = preferences.apiKey
-        if (apiKey.isEmpty()) {
-            _uiState.update { it.copy(error = "请先在设置中配置API密钥") }
-            return
-        }
+        if (apiKey.isEmpty()) { _uiState.update { it.copy(error = "请先在设置中配置API密钥") }; return }
         val novel = _uiState.value.novel ?: return
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isGenerating = true, error = null) }
+            _uiState.update { it.copy(isGenerating = true, error = null, generationStage = "正在改写...") }
             val result = grokRepository.rewriteSelection(apiKey, preferences.model, novel, selectedText, instruction)
             result.fold(
-                onSuccess = { rewritten ->
-                    onResult(rewritten)
-                    _uiState.update { it.copy(isGenerating = false) }
-                },
-                onFailure = { e ->
-                    _uiState.update { it.copy(isGenerating = false, error = e.message ?: "改写失败") }
-                }
+                onSuccess = { rewritten -> onResult(rewritten); _uiState.update { it.copy(isGenerating = false, generationStage = "") } },
+                onFailure = { e -> _uiState.update { it.copy(isGenerating = false, generationStage = "", error = e.message ?: "改写失败") } }
             )
         }
     }
 
-    // === Edit novel settings ===
     fun updateNovelSetting(field: String, content: String) {
         viewModelScope.launch {
             val novel = _uiState.value.novel ?: return@launch
@@ -290,51 +214,29 @@ class NovelDetailViewModel(
         }
     }
 
-    // === Regenerate settings ===
     fun regenerateSettings() {
         val apiKey = preferences.apiKey
-        if (apiKey.isEmpty()) {
-            _uiState.update { it.copy(error = "请先在设置中配置API密钥") }
-            return
-        }
+        if (apiKey.isEmpty()) { _uiState.update { it.copy(error = "请先在设置中配置API密钥") }; return }
         val novel = _uiState.value.novel ?: return
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isGenerating = true, error = null) }
-            val result = grokRepository.generateNovelSettings(
-                apiKey = apiKey,
-                model = preferences.model,
-                genre = novel.genre,
-                description = novel.description
-            )
+            _uiState.update { it.copy(isGenerating = true, error = null, generationStage = "正在重新生成设定...") }
+            val result = grokRepository.generateNovelSettings(apiKey, preferences.model, novel.genre, novel.description)
             result.fold(
                 onSuccess = { settings ->
                     val worldSetting = extractSection(settings, listOf("一、", "世界设定", "时代背景", "背景与环境"))
                     val keyCharacters = extractSection(settings, listOf("二、", "核心角色", "角色"))
                     val outline = extractSection(settings, listOf("三、", "故事大纲", "大纲"))
-                    novelRepository.updateNovel(novel.copy(
-                        worldSetting = worldSetting,
-                        keyCharacters = keyCharacters,
-                        outline = outline,
-                        lastSettingVersion = novel.lastSettingVersion + 1,
-                        updatedAt = System.currentTimeMillis()
-                    ))
-                    _uiState.update { it.copy(isGenerating = false) }
+                    novelRepository.updateNovel(novel.copy(worldSetting = worldSetting, keyCharacters = keyCharacters, outline = outline, lastSettingVersion = novel.lastSettingVersion + 1, updatedAt = System.currentTimeMillis()))
+                    _uiState.update { it.copy(isGenerating = false, generationStage = "") }
                 },
-                onFailure = { e ->
-                    _uiState.update { it.copy(isGenerating = false, error = e.message ?: "重新生成设定失败") }
-                }
+                onFailure = { e -> _uiState.update { it.copy(isGenerating = false, generationStage = "", error = e.message ?: "重新生成设定失败") } }
             )
         }
     }
 
-    // === Lorebook CRUD ===
     fun addLorebookEntry(keyword: String, content: String, importance: Int = 3) {
-        viewModelScope.launch {
-            novelRepository.insertLorebookEntry(LorebookEntry(
-                novelId = novelId, keyword = keyword, content = content, importance = importance
-            ))
-        }
+        viewModelScope.launch { novelRepository.insertLorebookEntry(LorebookEntry(novelId = novelId, keyword = keyword, content = content, importance = importance)) }
     }
 
     fun updateLorebookEntry(entry: LorebookEntry) {
@@ -350,13 +252,19 @@ class NovelDetailViewModel(
             val novel = _uiState.value.novel ?: return@launch
             novelRepository.deleteChaptersByNovelId(novelId)
             novelRepository.deleteLorebookEntriesByNovelId(novelId)
+            novelRepository.deleteCharacterStatesByNovelId(novelId)
             novelRepository.deleteNovel(novel)
         }
     }
 
-    fun clearError() {
-        _uiState.update { it.copy(error = null) }
+    fun initializeCharacterStates() {
+        viewModelScope.launch {
+            val novel = _uiState.value.novel ?: return@launch
+            memoryService.initializeCharacterStates(novel, novelRepository)
+        }
     }
+
+    fun clearError() { _uiState.update { it.copy(error = null) } }
 
     private suspend fun updateNovelWordCount(novel: Novel) {
         val chapters = novelRepository.getChaptersByNovelId(novelId).first()
@@ -368,40 +276,25 @@ class NovelDetailViewModel(
         val lines = text.lines()
         val result = StringBuilder()
         var inSection = false
-
         for (line in lines) {
             val trimmed = line.trim()
             val hashCount = trimmed.takeWhile { it == '#' }.length
-
             val isTopLevelHeader = when {
                 hashCount in 1..2 -> true
                 trimmed.matches(Regex("^[一二三四五六七八九十]+[、．.].*")) -> true
                 trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4 -> true
                 else -> false
             }
-
             if (isTopLevelHeader) {
                 if (inSection) break
-                if (sectionHeaders.any { header -> trimmed.contains(header) }) {
-                    inSection = true
-                    continue
-                }
-            } else if (inSection) {
-                result.appendLine(line)
-            }
+                if (sectionHeaders.any { header -> trimmed.contains(header) }) { inSection = true; continue }
+            } else if (inSection) result.appendLine(line)
         }
         return result.toString().trim()
     }
 
-    class Factory(
-        private val novelId: Long,
-        private val novelRepository: NovelRepository,
-        private val grokRepository: GrokRepository,
-        private val preferences: AppPreferences
-    ) : ViewModelProvider.Factory {
+    class Factory(private val novelId: Long, private val novelRepository: NovelRepository, private val grokRepository: GrokRepository, private val memoryService: MemoryService, private val critiqueService: CritiqueService, private val preferences: AppPreferences) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return NovelDetailViewModel(novelId, novelRepository, grokRepository, preferences) as T
-        }
+        override fun <T : ViewModel> create(modelClass: Class<T>): T = NovelDetailViewModel(novelId, novelRepository, grokRepository, memoryService, critiqueService, preferences) as T
     }
 }

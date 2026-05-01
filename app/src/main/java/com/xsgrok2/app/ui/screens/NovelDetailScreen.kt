@@ -40,7 +40,8 @@ fun NovelDetailScreen(
     onUpdateNovelSetting: (String, String) -> Unit,
     onRegenerateSettings: () -> Unit,
     onAddLorebookEntry: (String, String, Int) -> Unit,
-    onDeleteLorebookEntry: (LorebookEntry) -> Unit
+    onDeleteLorebookEntry: (LorebookEntry) -> Unit,
+    onInitializeCharacterStates: () -> Unit = {}  // v3.2新增
 ) {
     val novel = uiState.novel
     val context = LocalContext.current
@@ -198,7 +199,7 @@ fun NovelDetailScreen(
                         if (uiState.isGenerating) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("正在生成...")
+                            Text(if (uiState.generationStage.isNotEmpty()) uiState.generationStage else "正在生成...")
                         } else {
                             Icon(Icons.Default.AutoStories, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
@@ -332,6 +333,16 @@ private fun ChapterCard(
                         Spacer(modifier = Modifier.width(8.dp))
                     }
                     Text(statusLabel, style = MaterialTheme.typography.labelSmall, color = statusColor)
+                    // v3.2: 显示质量评分
+                    chapter.qualityScore?.let { score ->
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val scoreColor = when {
+                            score >= 0.8f -> MaterialTheme.colorScheme.primary
+                            score >= 0.6f -> MaterialTheme.colorScheme.secondary
+                            else -> MaterialTheme.colorScheme.error
+                        }
+                        Text("评分: ${(score * 100).toInt()}", style = MaterialTheme.typography.labelSmall, color = scoreColor)
+                    }
                 }
             }
             IconButton(onClick = onEditTitle) {
