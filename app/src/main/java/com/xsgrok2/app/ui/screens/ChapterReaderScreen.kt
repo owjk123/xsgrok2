@@ -40,8 +40,8 @@ fun ChapterReaderScreen(
     var rewriteInstruction by remember { mutableStateOf("") }
     var rewriteMode by remember { mutableStateOf("full") } // "full" or "selection"
     var selectionText by remember { mutableStateOf("") }
-    var selectionStart by remember { mutableIntStateOf(-1) }
-    var selectionEnd by remember { mutableIntStateOf(-1) }
+    var selectionStart by remember { mutableStateOf(-1) }
+    var selectionEnd by remember { mutableStateOf(-1) }
     var editContent by remember { mutableStateOf(uiState.editContent) }
 
     LaunchedEffect(uiState.editContent) {
@@ -136,7 +136,7 @@ fun ChapterReaderScreen(
                             error,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
                     }
                 }
             }
