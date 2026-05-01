@@ -16,6 +16,9 @@ data class Novel(
     val outline: String = "",
     val model: String = "grok-4.20-beta",
     val totalWordCount: Int = 0,
+    val targetWordCount: Int = 3000,
+    val temperature: Float = 0.85f,
+    val lastSettingVersion: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

@@ -36,6 +36,14 @@ class AppPreferences private constructor(context: Context) {
         get() = prefs.getBoolean("night_mode", false)
         set(value) = prefs.edit().putBoolean("night_mode", value).apply()
 
+    var defaultTargetWordCount: Int
+        get() = prefs.getInt("default_target_word_count", 3000)
+        set(value) = prefs.edit().putInt("default_target_word_count", value).apply()
+
+    var defaultTemperature: Float
+        get() = prefs.getFloat("default_temperature", 0.85f)
+        set(value) = prefs.edit().putFloat("default_temperature", value).apply()
+
     companion object {
         @Volatile
         private var INSTANCE: AppPreferences? = null

@@ -31,11 +31,11 @@ object ExportUtils {
         sb.appendLine("\u3010\u5927\u7EB2\u3011")
         sb.appendLine(novel.outline)
         sb.appendLine()
-        sb.appendLine("=" .repeat(40))
+        sb.appendLine("=".repeat(40))
         sb.appendLine()
 
         chapters.sortedBy { it.chapterNumber }.forEach { chapter ->
-            sb.appendLine("--- ${chapter.title} ---")
+            sb.appendLine("--- ${chapter.displayTitle()} ---")
             sb.appendLine(chapter.content)
             sb.appendLine()
         }

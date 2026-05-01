@@ -5,18 +5,24 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.xsgrok2.app.data.dao.ChapterDao
+import com.xsgrok2.app.data.dao.ChapterInstructionDao
+import com.xsgrok2.app.data.dao.LorebookEntryDao
 import com.xsgrok2.app.data.dao.NovelDao
 import com.xsgrok2.app.data.model.Chapter
+import com.xsgrok2.app.data.model.ChapterInstruction
+import com.xsgrok2.app.data.model.LorebookEntry
 import com.xsgrok2.app.data.model.Novel
 
 @Database(
-    entities = [Novel::class, Chapter::class],
-    version = 1,
+    entities = [Novel::class, Chapter::class, LorebookEntry::class, ChapterInstruction::class],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun novelDao(): NovelDao
     abstract fun chapterDao(): ChapterDao
+    abstract fun lorebookEntryDao(): LorebookEntryDao
+    abstract fun chapterInstructionDao(): ChapterInstructionDao
 
     companion object {
         @Volatile

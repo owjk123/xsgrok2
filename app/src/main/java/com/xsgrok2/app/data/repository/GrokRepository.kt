@@ -72,29 +72,7 @@ ${narrativeStructure}。
 
         val userPrompt = "我想写一部${genre}类型的小说，核心构思是：$description"
 
-        return try {
-            val request = ChatRequest(
-                model = model,
-                messages = listOf(
-                    Message(role = "system", content = systemPrompt),
-                    Message(role = "user", content = userPrompt)
-                ),
-                temperature = 0.8,
-                max_tokens = 4096
-            )
-
-            val response = apiService.chatCompletion("Bearer $apiKey", request)
-            if (response.error != null) {
-                Result.failure(Exception(response.error.message ?: "API错误"))
-            } else if (response.choices.isNullOrEmpty()) {
-                Result.failure(Exception("API返回为空"))
-            } else {
-                val content = response.choices[0].message?.content ?: ""
-                Result.success(content)
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        return callApi(apiKey, model, systemPrompt, userPrompt, 0.8, 4096)
     }
 
     suspend fun generateChapter(
@@ -104,8 +82,29 @@ ${narrativeStructure}。
         chapterNumber: Int,
         chapterTitle: String,
         previousChapterContent: String = "",
-        userNote: String = ""
+        userNote: String = "",
+        instruction: ChapterInstruction? = null,
+        lorebookEntries: List<LorebookEntry> = emptyList()
     ): Result<String> {
+        val lorebookContext = if (lorebookEntries.isNotEmpty()) {
+            "\n【世界词条】\n" + lorebookEntries.joinToString("\n") { "- ${it.keyword}：${it.content}" }
+        } else ""
+
+        val instructionBlock = if (instruction != null) {
+            buildString {
+                appendLine("\n【本章创作指令】")
+                if (instruction.coreEvent.isNotBlank()) appendLine("- 核心事件：${instruction.coreEvent}")
+                if (instruction.characterChanges.isNotBlank()) appendLine("- 人物变化：${instruction.characterChanges}")
+                if (instruction.mood.isNotBlank()) appendLine("- 情绪氛围：${instruction.mood}")
+                if (instruction.foreshadowing.isNotBlank()) appendLine("- 伏笔回收：${instruction.foreshadowing}")
+                if (instruction.newThreads.isNotBlank()) appendLine("- 新线埋设：${instruction.newThreads}")
+                if (instruction.forbiddenElements.isNotBlank()) appendLine("- 禁止出现：${instruction.forbiddenElements}")
+                if (instruction.wordCountTarget > 0) appendLine("- 目标字数：${instruction.wordCountTarget}字")
+            }
+        } else if (userNote.isNotBlank()) {
+            "\n【特别要求】：$userNote。必须在剧情中落实此要求！"
+        } else ""
+
         val systemPrompt = """
 你是一位资深中文网络小说作家，正在连载一部${novel.genre}小说《${novel.title}》。
 
@@ -115,7 +114,7 @@ ${narrativeStructure}。
 - 严禁偏离当前章节大纲核心事件
 
 ## 写作要求
-- 字数要求：至少2500个中文字符
+- 字数要求：至少${instruction?.wordCountTarget ?: novel.targetWordCount}个中文字符
 - 角色行为必须符合设定，严禁人物失忆或性格突变
 - 结尾要留下悬念或转折，承接下一章
 - 对话要自然口语化，符合角色性格
@@ -131,6 +130,7 @@ ${narrativeStructure}。
             appendLine()
             appendLine("【故事大纲】")
             appendLine(novel.outline)
+            append(lorebookContext)
             appendLine()
             append("第${chapterNumber}章：${chapterTitle}")
             appendLine()
@@ -140,15 +140,144 @@ ${narrativeStructure}。
                 appendLine(previousChapterContent.takeLast(1500))
                 appendLine()
             }
+            append(instructionBlock)
             appendLine()
             append("请撰写第${chapterNumber}章：${chapterTitle}")
-            if (userNote.isNotEmpty()) {
-                appendLine()
-                appendLine()
-                append("【特别要求】：$userNote。必须在剧情中落实此要求！")
-            }
         }
 
+        val temp = if (instruction != null) {
+            minOf(novel.temperature + 0.05f, 1.0f)
+        } else novel.temperature
+
+        return callApi(apiKey, model, systemPrompt, userPrompt, temp.toDouble(), 4096)
+    }
+
+    suspend fun regenerateChapter(
+        apiKey: String,
+        model: String,
+        novel: Novel,
+        chapterNumber: Int,
+        chapterTitle: String,
+        previousChapterContent: String = "",
+        currentContent: String = "",
+        mode: String = "rewrite",
+        instruction: ChapterInstruction? = null,
+        userNote: String = "",
+        lorebookEntries: List<LorebookEntry> = emptyList()
+    ): Result<String> {
+        val modeDesc = when (mode) {
+            "rewrite" -> "完全重写这一章，不受已有内容限制，但保持与前后的连贯性"
+            "improve" -> "基于现有内容改进：保持主线不变，提升文笔、补充细节、修正不合理之处"
+            "continue" -> "继续现有内容：保留现有内容，从结尾处继续延伸"
+            else -> "重写这一章"
+        }
+
+        val lorebookContext = if (lorebookEntries.isNotEmpty()) {
+            "\n【世界词条】\n" + lorebookEntries.joinToString("\n") { "- ${it.keyword}：${it.content}" }
+        } else ""
+
+        val instructionBlock = if (instruction != null) {
+            buildString {
+                appendLine("\n【修改指令】")
+                if (instruction.coreEvent.isNotBlank()) appendLine("- 调整核心事件为：${instruction.coreEvent}")
+                if (instruction.characterChanges.isNotBlank()) appendLine("- 人物变化：${instruction.characterChanges}")
+                if (instruction.mood.isNotBlank()) appendLine("- 情绪氛围：${instruction.mood}")
+                if (instruction.foreshadowing.isNotBlank()) appendLine("- 伏笔回收：${instruction.foreshadowing}")
+                if (instruction.newThreads.isNotBlank()) appendLine("- 新线埋设：${instruction.newThreads}")
+                if (instruction.forbiddenElements.isNotBlank()) appendLine("- 禁止出现：${instruction.forbiddenElements}")
+            }
+        } else if (userNote.isNotBlank()) {
+            "\n【修改要求】：$userNote"
+        } else ""
+
+        val systemPrompt = """
+你是一位资深中文网络小说作家，正在修改一部${novel.genre}小说《${novel.title}》的第${chapterNumber}章。
+
+## 修改模式：${modeDesc}
+
+## 禁止事项
+- 严禁AI套路词
+- 严禁偏离大纲核心事件（除非指令要求调整）
+- 保持与前后章节的连贯性
+
+## 写作要求
+- 字数要求：至少${novel.targetWordCount}个中文字符
+- 角色行为必须符合设定
+- 对话自然口语化
+""".trimIndent()
+
+        val userPrompt = buildString {
+            appendLine("【核心设定】")
+            appendLine(novel.worldSetting)
+            appendLine()
+            appendLine("【核心角色】")
+            appendLine(novel.keyCharacters)
+            appendLine()
+            appendLine("【故事大纲】")
+            appendLine(novel.outline)
+            append(lorebookContext)
+            appendLine()
+            append("第${chapterNumber}章：${chapterTitle}")
+            appendLine()
+            if (previousChapterContent.isNotEmpty()) {
+                appendLine()
+                appendLine("【前一章结尾片段】")
+                appendLine(previousChapterContent.takeLast(1500))
+                appendLine()
+            }
+            if (currentContent.isNotEmpty() && mode != "rewrite") {
+                appendLine()
+                appendLine("【当前章节内容】")
+                appendLine(currentContent.take(3000))
+                appendLine()
+            }
+            append(instructionBlock)
+            appendLine()
+            append("请${modeDesc}：第${chapterNumber}章：${chapterTitle}")
+        }
+
+        return callApi(apiKey, model, systemPrompt, userPrompt, novel.temperature.toDouble(), 4096)
+    }
+
+    suspend fun rewriteSelection(
+        apiKey: String,
+        model: String,
+        novel: Novel,
+        selectedText: String,
+        instruction: String
+    ): Result<String> {
+        val systemPrompt = """
+你是一位资深中文小说编辑，精通文字润色和改写。
+
+## 规则
+- 保持与原文的风格一致
+- 严禁AI套路词
+- 改写后的文本应比原文更好，而非不同
+- 保持上下文语义连贯
+""".trimIndent()
+
+        val userPrompt = buildString {
+            appendLine("小说类型：${novel.genre}，写作风格：${novel.writingStyle}")
+            appendLine()
+            appendLine("【原文】")
+            appendLine(selectedText)
+            appendLine()
+            appendLine("【改写指令】$instruction")
+            appendLine()
+            append("请根据改写指令重写以上原文片段，只输出改写后的内容：")
+        }
+
+        return callApi(apiKey, model, systemPrompt, userPrompt, 0.7, 2048)
+    }
+
+    private suspend fun callApi(
+        apiKey: String,
+        model: String,
+        systemPrompt: String,
+        userPrompt: String,
+        temperature: Double = 0.8,
+        maxTokens: Int = 4096
+    ): Result<String> {
         return try {
             val request = ChatRequest(
                 model = model,
@@ -156,8 +285,8 @@ ${narrativeStructure}。
                     Message(role = "system", content = systemPrompt),
                     Message(role = "user", content = userPrompt)
                 ),
-                temperature = 0.85,
-                max_tokens = 4096
+                temperature = temperature,
+                max_tokens = maxTokens
             )
 
             val response = apiService.chatCompletion("Bearer $apiKey", request)

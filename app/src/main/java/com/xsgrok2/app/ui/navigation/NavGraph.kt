@@ -10,6 +10,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.xsgrok2.app.App
+import com.xsgrok2.app.data.model.ChapterInstruction
+import com.xsgrok2.app.data.model.LorebookEntry
 import com.xsgrok2.app.data.repository.GrokRepository
 import com.xsgrok2.app.data.repository.NovelRepository
 import com.xsgrok2.app.data.api.RetrofitClient
@@ -22,8 +24,15 @@ fun NavGraph(navController: NavHostController) {
     val database = app.database
     val preferences = app.preferences
 
-    val novelRepository = NovelRepository(database.novelDao(), database.chapterDao())
-    val grokRepository = GrokRepository(RetrofitClient.create(preferences.apiBaseUrl).create(com.xsgrok2.app.data.api.GrokApiService::class.java))
+    val novelRepository = NovelRepository(
+        database.novelDao(),
+        database.chapterDao(),
+        database.lorebookEntryDao(),
+        database.chapterInstructionDao()
+    )
+    val grokRepository = GrokRepository(
+        RetrofitClient.create(preferences.apiBaseUrl).create(com.xsgrok2.app.data.api.GrokApiService::class.java)
+    )
 
     NavHost(
         navController = navController,
@@ -67,6 +76,8 @@ fun NavGraph(navController: NavHostController) {
                 onUpdateDescription = { createViewModel.updateDescription(it) },
                 onUpdateWritingStyle = { createViewModel.updateWritingStyle(it) },
                 onUpdateGeneratedSettings = { createViewModel.updateGeneratedSettings(it) },
+                onUpdateTargetWordCount = { createViewModel.updateTargetWordCount(it) },
+                onUpdateTemperature = { createViewModel.updateTemperature(it) },
                 onGenerate = { createViewModel.generateSettings() },
                 onConfirm = { createViewModel.confirmAndCreateNovel() },
                 onNavigateToDetail = { novelId ->
@@ -86,13 +97,33 @@ fun NavGraph(navController: NavHostController) {
             NovelDetailScreen(
                 uiState = uiState,
                 onBack = { navController.popBackStack() },
-                onGenerateNextChapter = { detailViewModel.generateNextChapter() },
+                onGenerateNextChapter = { title, instruction, note ->
+                    detailViewModel.generateNextChapter(title, instruction, note)
+                },
+                onInsertChapterAt = { position, title, instruction, note ->
+                    detailViewModel.insertChapterAt(position, title, instruction, note)
+                },
+                onRegenerateChapter = { chapterId, mode, instruction, note ->
+                    detailViewModel.regenerateChapter(chapterId, mode, instruction, note)
+                },
+                onDeleteChapter = { chapterId -> detailViewModel.deleteChapter(chapterId) },
+                onUpdateChapterTitle = { chapterId, title -> detailViewModel.updateChapterTitle(chapterId, title) },
                 onNavigateToChapter = { chapterId ->
                     navController.navigate(Screen.ChapterReader.createRoute(novelId, chapterId))
                 },
                 onDeleteNovel = {
                     detailViewModel.deleteNovel()
                     navController.popBackStack()
+                },
+                onUpdateNovelSetting = { field, content ->
+                    detailViewModel.updateNovelSetting(field, content)
+                },
+                onRegenerateSettings = { detailViewModel.regenerateSettings() },
+                onAddLorebookEntry = { keyword, content, importance ->
+                    detailViewModel.addLorebookEntry(keyword, content, importance)
+                },
+                onDeleteLorebookEntry = { entry ->
+                    detailViewModel.deleteLorebookEntry(entry)
                 }
             )
         }
@@ -104,13 +135,26 @@ fun NavGraph(navController: NavHostController) {
                 navArgument("chapterId") { type = NavType.LongType }
             )
         ) { backStackEntry ->
-            val novelId = backStackEntry.arguments?.getLong("novelId") ?: return@composable
             val chapterId = backStackEntry.arguments?.getLong("chapterId") ?: return@composable
-            val readerViewModel: ChapterReaderViewModel = viewModel(factory = ChapterReaderViewModel.Factory(chapterId, novelRepository))
+            val readerViewModel: ChapterReaderViewModel = viewModel(
+                factory = ChapterReaderViewModel.Factory(chapterId, novelRepository, grokRepository, preferences)
+            )
             val uiState by readerViewModel.uiState.collectAsState()
             ChapterReaderScreen(
                 uiState = uiState,
                 onBack = { navController.popBackStack() },
+                onStartEditing = { readerViewModel.startEditing() },
+                onSaveEdit = { content -> readerViewModel.updateEditContent(content); readerViewModel.saveEdit() },
+                onCancelEdit = { readerViewModel.cancelEdit() },
+                onRewriteSelection = { text, instruction, onResult ->
+                    readerViewModel.rewriteSelection(text, instruction, onResult)
+                },
+                onApplyRewrite = { originalText, rewrittenText ->
+                    readerViewModel.applyRewriteResult(rewrittenText, originalText)
+                },
+                onNavigateToChapter = { newChapterId ->
+                    readerViewModel.navigateToChapter(newChapterId)
+                },
                 fontSize = preferences.fontSize,
                 nightMode = preferences.nightMode
             )

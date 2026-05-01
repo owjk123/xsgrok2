@@ -1,0 +1,133 @@
+**xsgrok2 v3.0 迭代方案**
+
+**版本定位**：从“AI自动小说生成器”升级为“可控的AI辅助小说创作工具”，核心目标是**把创作主权彻底交还给用户**，解决“只能顺序生成、设定不可变、编辑能力缺失”三大死穴。
+
+---
+
+### 一、v3.0 完整功能清单
+
+**核心功能（P0）**
+1. 任意章节自由生成与重生成（支持1-999章，含插入章节）
+2. 章节富文本编辑 + AI辅助改写（选中改写、全文润色、指令改写、扩写/精简）
+3. 章节版本历史管理（支持回滚）
+4. 动态设定管理系统（世界设定、角色卡、大纲中途可编辑）
+5. 轻量Lorebook（世界词条）系统，支持重要程度与触发关键词
+6. 结构化章节指令系统（替代原始userNote）
+7. 设定变更影响范围选择（仅后续 / 从第X章重写）
+
+**增强功能（P1）**
+8. 大纲驱动生成 + 自定义章节标题
+9. 批量生成草稿模式（支持3-10章低质量快速生成）
+10. 生成参数精细控制（字数、温度、遵循度、视角等，可按小说/章节设置）
+11. 同一章节多版本并存与对比
+
+**体验与基础功能**
+- 完整的章节列表管理（插入、删除、排序）
+- 小说设定与Lorebook在生成时自动注入上下文（通过Retrofit传递）
+- 导出支持：TXT、Markdown、带目录的EPUB
+- Room数据库平滑迁移（v2→v3）
+- 基于Jetpack Compose的现代化UI
+
+**后续版本规划（P2，本版本不做）**
+- 故事地图/可视化时间线
+- 深度角色卡管理系统 + 状态跟踪
+- 写作风格学习（用户历史作品上传）
+- 社区提示词模板市场
+- 分支剧情树（剧情线管理）
+
+---
+
+### 二、迭代改进项（合并PM与深度用户意见，去重后）
+
+#### **P0（必须完成，否则v3.0无意义）**
+
+**改进项1：章节自由生成与重生成机制**
+- **问题描述**：只能顺序生成下一章，无法跳章、插入章节或针对性重写，导致用户完全失去创作主权。
+- **解决方案**：章节列表页点击任意章节号弹出生成对话框，支持输入章节号（若存在则为重生成）。提供三种模式：完全重写、基于现有内容改写、延续当前内容。支持“在第N章后插入新章”。
+- **涉及修改的文件/模块**：`ChapterListScreen.kt`、`GenerateChapterDialog.kt`、`ChapterViewModel.kt`、`NovelRepository.kt`、`ApiService.kt`（新增`generateChapter(chapterNum, mode, referenceContent, instruction)`接口）、`Chapter.kt`实体（新增`status: DRAFT/ PUBLISHED`）。
+- **实现复杂度**：中
+- **Room迁移**：为`Chapter`表新增`status`和`customTitle`字段，使用`Migration(2, 3)`添加默认值。
+
+**改进项2：章节内容编辑与AI辅助改写**
+- **问题描述**：生成内容不可编辑，无法针对性润色或修改，极大降低实用性。
+- **解决方案**：章节阅读页增加“编辑”按钮，进入Compose富文本编辑器（使用`TextField` + Markdown支持）。选中文字后弹出AI操作菜单（改写、润色、扩写、精简、按指令改写）。每次保存生成新版本，保留历史记录。
+- **涉及修改的文件/模块**：`ChapterReaderScreen.kt`（新增编辑模式）、`ChapterEditorScreen.kt`（新）、`ChapterVersion.kt`（新Room实体）、`ChapterViewModel.kt`、`AiRewriteRepository.kt`（封装改写API）、Room数据库。
+- **实现复杂度**：高（富文本+版本管理）
+- **Room迁移**：新增`ChapterVersion`表（一对多关联Chapter），Migration中创建新表。
+
+**改进项3：动态设定管理 + 轻量Lorebook**
+- **问题描述**：设定一旦创建即锁死，无法中途调整，与真实创作流程严重不符；缺乏长期记忆机制。
+- **解决方案**：小说详情页中“世界设定”“核心角色”“故事大纲”均支持随时编辑。新增Lorebook模块，用户可添加带触发关键词和重要程度的词条。编辑设定后弹出“影响范围选择”（仅后续章节 / 从第X章开始重写）。
+- **涉及修改的文件/模块**：`NovelDetailScreen.kt`、`LorebookScreen.kt`（新）、`LorebookEntry.kt`（新Room实体）、`Novel.kt`（新增`lastSettingVersion`字段用于追踪变更）、`GenerationPromptBuilder.kt`（重构，自动注入Lorebook和最新设定）。
+- **实现复杂度**：中
+- **Room迁移**：新增`LorebookEntry`表（外键关联Novel），Migration(2,3)创建表并支持v2用户数据平滑过渡。
+
+**改进项4：结构化章节指令系统**
+- **问题描述**：原始`userNote`单文本框过于原始，无法精准传达创作意图。
+- **解决方案**：将`userNote`升级为`ChapterInstruction`结构化对象，包含：核心事件、人物状态变化、情绪氛围、伏笔回收、新线埋设、字数要求、禁止元素、参考风格。支持模板保存与复用。在生成/重写时作为核心Prompt输入。
+- **涉及修改的文件/模块**：`ChapterInstruction.kt`（新数据类和Room实体）、`InstructionEditorScreen.kt`（新）、`ChapterViewModel.kt`、`GenerationRequest`数据模型（Retrofit）。
+- **实现复杂度**：中
+- **Room迁移**：新增`ChapterInstruction`表（一对一或一对多关联Chapter），Migration处理。
+
+---
+
+#### **P1（强烈建议完成，大幅提升生产力）**
+
+**改进项5：大纲驱动生成 + 章节标题自定义**
+- **问题描述**：大纲无法灵活调整，章节标题固定为“第N章”缺乏作者感。
+- **解决方案**：大纲节点支持手动编辑标题与详细内容。生成时必须引用对应大纲节点。允许用户自定义章节标题，自动生成可覆盖。
+- **涉及修改的文件/模块**：`OutlineEditorScreen.kt`、`Novel.kt`与`OutlineNode.kt`模型调整、`Chapter.kt`新增`customTitle`和`outlineNodeId`字段、`GenerationPromptBuilder.kt`。
+- **实现复杂度**：低
+- **Room迁移**：为现有表增加字段，Migration设置默认值。
+
+**改进项6：批量生成与草稿模式**
+- **问题描述**：只能单章生成，效率极低。
+- **解决方案**：支持选择连续章节批量生成草稿（降低温度、简化Prompt加快速度）。草稿章节在列表中标记为灰色，可批量操作。
+- **涉及修改的文件/模块**：`BatchGenerateDialog.kt`、`ChapterViewModel.kt`（新增批量接口调用逻辑）、Retrofit API扩展。
+- **实现复杂度**：中
+
+**改进项7：生成参数精细控制**
+- **问题描述**：缺乏对生成质量、长度、创造性的控制。
+- **解决方案**：在小说设置和生成弹窗中增加滑块/开关：目标字数、温度（创意度）、遵循设定严格度、叙事视角、重复惩罚等。可在小说层面设置默认值，也可对特定章节覆盖。
+- **涉及修改的文件/模块**：`GenerationSettings.kt`（新嵌入实体）、`NovelSettingsScreen.kt`、`GenerateChapterDialog.kt`、`GenerationRequest`模型。
+- **实现复杂度**：低
+
+**改进项8：章节多版本支持**
+- **问题描述**：无法保存同一章节的不同风格版本进行对比。
+- **解决方案**：在版本历史基础上增加“生成新版本”功能，支持在章节阅读页快速生成V2、V3并对比。默认显示最新版本。
+- **涉及修改的文件/模块**：`ChapterVersion.kt`扩展、`VersionCompareScreen.kt`（新）、`ChapterViewModel.kt`。
+- **实现复杂度**：中
+
+---
+
+#### **P2（可根据资源情况选择性加入）**
+
+- 故事地图与可视化大纲（使用Graph库，复杂度高）
+- 角色卡独立深度管理系统（与Lorebook融合）
+- 写作风格学习（需后端支持用户作品训练，复杂度高）
+- 社区提示词模板市场
+
+---
+
+### 三、数据库迁移说明
+
+本次升级将进行**Room v2 → v3**迁移，主要变更：
+- 新增表：`LorebookEntry`、`ChapterVersion`、`ChapterInstruction`
+- 修改表：`Chapter`（增加`customTitle`、`status`、`outlineNodeId`等）
+- `Novel`表增加`lastSettingVersion`用于设定变更追踪
+
+**迁移策略**：使用`Migration(2, 3)`，所有新增字段均设置合理默认值，确保v2.0用户数据100%兼容，不会出现崩溃或数据丢失。
+
+---
+
+### 四、技术实现可行性总结
+
+- **UI层**：全部使用Jetpack Compose重构相关页面，风格保持统一。
+- **数据层**：Room + Repository模式，Prompt构建逻辑集中到`GenerationPromptBuilder`统一维护。
+- **网络层**：Retrofit接口向后端传递更结构化的JSON（Instruction、Lorebook列表、GenerationSettings），后端需同步升级Prompt工程，但前端改动可控。
+- **性能考虑**：Lorebook和设定注入将由服务端控制上下文长度，前端仅负责数据管理和展示。
+- **开发排期建议**：P0四项为核心战役，建议先完成1、2、3、4，再并行P1中的5和7（相对简单）。
+
+此方案已全面合并产品经理与深度用户的核心诉求，去除了重复部分，优先级划分清晰，且全部在Android + Kotlin + Compose + Room + Retrofit技术栈内可落地。
+
+需要我进一步输出具体PRD、数据库ER图、或各模块详细技术设计文档，请随时指示。

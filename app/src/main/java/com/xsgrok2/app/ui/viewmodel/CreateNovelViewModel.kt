@@ -17,6 +17,8 @@ data class CreateNovelUiState(
     val description: String = "",
     val writingStyle: String = "细腻生动",
     val generatedSettings: String = "",
+    val targetWordCount: Int = 3000,
+    val temperature: Float = 0.85f,
     val isLoading: Boolean = false,
     val step: CreateStep = CreateStep.INPUT,
     val error: String? = null,
@@ -46,6 +48,14 @@ class CreateNovelViewModel(
 
     fun updateGeneratedSettings(settings: String) {
         _uiState.update { it.copy(generatedSettings = settings) }
+    }
+
+    fun updateTargetWordCount(count: Int) {
+        _uiState.update { it.copy(targetWordCount = count) }
+    }
+
+    fun updateTemperature(temp: Float) {
+        _uiState.update { it.copy(temperature = temp) }
     }
 
     fun generateSettings() {
@@ -104,7 +114,9 @@ class CreateNovelViewModel(
                 worldSetting = extractSection(state.generatedSettings, listOf("一、", "世界设定", "时代背景", "背景与环境")),
                 keyCharacters = extractSection(state.generatedSettings, listOf("二、", "核心角色", "角色")),
                 outline = extractSection(state.generatedSettings, listOf("三、", "故事大纲", "大纲")),
-                model = preferences.model
+                model = preferences.model,
+                targetWordCount = state.targetWordCount,
+                temperature = state.temperature
             )
             val id = novelRepository.insertNovel(novel)
             _uiState.update { it.copy(isLoading = false, createdNovelId = id) }

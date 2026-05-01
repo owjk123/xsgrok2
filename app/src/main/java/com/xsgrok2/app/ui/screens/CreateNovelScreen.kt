@@ -22,12 +22,15 @@ fun CreateNovelScreen(
     onUpdateDescription: (String) -> Unit,
     onUpdateWritingStyle: (String) -> Unit,
     onUpdateGeneratedSettings: (String) -> Unit,
+    onUpdateTargetWordCount: (Int) -> Unit,
+    onUpdateTemperature: (Float) -> Unit,
     onGenerate: () -> Unit,
     onConfirm: () -> Unit,
     onNavigateToDetail: (Long) -> Unit
 ) {
     val writingStyles = listOf("细腻生动", "简洁有力", "幽默风趣", "冷峻写实", "诗意唯美")
     val genreSuggestions = listOf("玄幻", "言情", "都市", "悬疑", "科幻", "日常", "历史", "古风", "恐怖", "冒险")
+    val wordCountOptions = listOf(2000 to "短篇(2000字)", 3000 to "中篇(3000字)", 5000 to "长篇(5000字)")
 
     val createdNovelId = uiState.createdNovelId
     LaunchedEffect(createdNovelId) {
@@ -100,6 +103,33 @@ fun CreateNovelScreen(
                                 label = { Text(style) }
                             )
                         }
+                    }
+
+                    HorizontalDivider()
+
+                    Text("生成参数", style = MaterialTheme.typography.titleSmall)
+                    Text("每章目标字数", style = MaterialTheme.typography.bodyMedium)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        wordCountOptions.forEach { (count, label) ->
+                            FilterChip(
+                                selected = uiState.targetWordCount == count,
+                                onClick = { onUpdateTargetWordCount(count) },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+
+                    Text("创造性 (温度: ${"%.2f".format(uiState.temperature)})", style = MaterialTheme.typography.bodyMedium)
+                    Slider(
+                        value = uiState.temperature,
+                        onValueChange = onUpdateTemperature,
+                        valueRange = 0.3f..1.2f,
+                        steps = 8,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("保守/遵循", style = MaterialTheme.typography.labelSmall)
+                        Text("大胆/创新", style = MaterialTheme.typography.labelSmall)
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
