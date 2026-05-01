@@ -1,3 +1,4 @@
+@file:OptIn(ExperimentalLayoutApi::class)
 package com.xsgrok2.app.ui.screens
 
 import androidx.compose.foundation.layout.*
@@ -162,7 +163,7 @@ fun CreateNovelScreen(
                 }
             }
             CreateStep.SAVING -> {
-                Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = androidx.compose.ui.Alignment.Center) {
                     CircularProgressIndicator()
                 }
             }

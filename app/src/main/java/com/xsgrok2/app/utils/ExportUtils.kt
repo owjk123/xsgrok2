@@ -3,6 +3,7 @@ package com.xsgrok2.app.utils
 import com.xsgrok2.app.data.model.Chapter
 import com.xsgrok2.app.data.model.Novel
 import java.io.File
+import java.nio.charset.Charsets
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -40,7 +41,7 @@ object ExportUtils {
             sb.appendLine()
         }
 
-        file.writeText(sb.toString(), charset = "UTF-8")
+        file.writeText(sb.toString(), Charsets.UTF_8)
         return file
     }
 }
